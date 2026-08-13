@@ -185,7 +185,7 @@ if __name__=="__main__":
     #reset_db()
     #build_embedding()
 
-    for item in search("什么雯与魔法少女交流"):
+    for item in search("程斌初次遇见文雯"):
         meta=item["metadata"]
         print(
             f"\nscore={item['score']:.4f} chapter={meta['chapter']} chunk={meta['chunk']} title={meta['title']}\n"
