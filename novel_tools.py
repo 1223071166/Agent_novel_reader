@@ -4,10 +4,7 @@ import re
 from config import CHAPTER_DIR, CHAPTER_LIST
 from summaries import get_summary
 
-try:
-    from embedding import search as embedding_search
-except Exception:
-    embedding_search = None
+embedding_search = None
 
 chapter_cache={}
 titles={}
@@ -41,7 +38,7 @@ def read_chapter(chapter_id):
     return chapter
 
 
-#可用工具列表
+#可用工具
 def get_chapter_list():
     """获取小说章节列表"""
     with open(CHAPTER_LIST,"r",encoding="utf-8") as f:
@@ -123,9 +120,11 @@ def search_keyword_in_chapter(chapter_id:int, keyword:str):
 
 def semantic_search(query:str,n:int=10):
     """使用embedding进行小说语义检索，返回最相关文本片段"""
-
+    global embedding_search
     if embedding_search is None:
-        raise RuntimeError("embedding search is unavailable")
+        from embedding import search
+        embedding_search = search
+
     results=embedding_search(query,n=n)
 
     output=[]

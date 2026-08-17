@@ -1,10 +1,24 @@
 import os
 import chromadb
 import shutil
-from FlagEmbedding import FlagAutoModel,FlagReranker
+from FlagEmbedding import FlagAutoModel
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
-from config import CHAPTER_DIR, DB_DIR, MODEL_NAME,RERANKER_MODEL_NAME
+from config import (
+    CHAPTER_DIR,
+    DB_DIR,
+    EMBEDDING_BATCH_SIZE,
+    EMBEDDING_CHUNK_OVERLAP,
+    EMBEDDING_CHUNK_SIZE,
+    EMBEDDING_USE_FP16,
+    MODEL_NAME,
+    RERANKER_MAX_LENGTH,
+    RERANKER_MODEL_NAME,
+    SEMANTIC_SEARCH_DEFAULT_N,
+    SEMANTIC_SEARCH_TOP_K,
+    VECTOR_COLLECTION_NAME,
+    VECTOR_DB_BATCH_SIZE,
+)
 
 
 _model=None
@@ -14,7 +28,7 @@ def get_model():
         _model=FlagAutoModel.from_finetuned(
             MODEL_NAME,
             query_instruction_for_retrieval="为这个句子生成用于检索小说内容的向量：",
-            use_fp16=True
+            use_fp16=EMBEDDING_USE_FP16
         )
     return _model
 
@@ -42,7 +56,7 @@ def get_collection():
             path=DB_DIR
         )
         _collection=client.get_or_create_collection(
-            name="novel"
+            name=VECTOR_COLLECTION_NAME
         )
     return _collection
 
@@ -72,14 +86,14 @@ def rerank(query, documents):
         padding=True,
         truncation=True,
         return_tensors="pt",
-        max_length=512
+        max_length=RERANKER_MAX_LENGTH
     )
 
     with torch.no_grad():
         scores=reranker_model(**inputs).logits.squeeze(-1)
 
     return scores.tolist()
-def split_text(text,size=500,overlap=100):
+def split_text(text,size=EMBEDDING_CHUNK_SIZE,overlap=EMBEDDING_CHUNK_OVERLAP):
     step=size-overlap
     return [
         text[i:i+size]
@@ -129,25 +143,23 @@ def build_embedding():
 
     vectors=get_model().encode(
         documents,
-        batch_size=16
+        batch_size=EMBEDDING_BATCH_SIZE
     )
 
 
-    batch_size=5000
-
     collection=get_collection()
-    for i in range(0,len(ids),batch_size):
+    for i in range(0,len(ids),VECTOR_DB_BATCH_SIZE):
         collection.add(
-            ids=ids[i:i+batch_size],
-            documents=documents[i:i+batch_size],
-            embeddings=vectors[i:i+batch_size].tolist(),
-            metadatas=metadatas[i:i+batch_size]
+            ids=ids[i:i+VECTOR_DB_BATCH_SIZE],
+            documents=documents[i:i+VECTOR_DB_BATCH_SIZE],
+            embeddings=vectors[i:i+VECTOR_DB_BATCH_SIZE].tolist(),
+            metadatas=metadatas[i:i+VECTOR_DB_BATCH_SIZE]
         )
 
     print("embedding完成")
 
 
-def search(query,n=5,top_k=50):
+def search(query,n=SEMANTIC_SEARCH_DEFAULT_N,top_k=SEMANTIC_SEARCH_TOP_K):
     vector=get_model().encode_queries(
         [query]
     )[0]
@@ -191,4 +203,3 @@ if __name__=="__main__":
             f"\nscore={item['score']:.4f} chapter={meta['chapter']} chunk={meta['chunk']} title={meta['title']}\n"
         )
         print(item["text"][:500]+"...")
-    

@@ -1,9 +1,7 @@
 import os
 import re
 
-INPUT_FILE="novel.txt"
-OUTPUT_DIR="chapters"
-CHAPTER_LIST="chapters.txt"
+from config import CHAPTER_DIR, CHAPTER_LIST, NOVEL_FILE
 
 
 def find_chapters(text):
@@ -37,19 +35,19 @@ def find_chapters(text):
 
 
 def save_chapters(chapters):
-    if os.path.exists(OUTPUT_DIR):
-        for f in os.listdir(OUTPUT_DIR):
-            path=os.path.join(OUTPUT_DIR,f)
+    if os.path.exists(CHAPTER_DIR):
+        for f in os.listdir(CHAPTER_DIR):
+            path=os.path.join(CHAPTER_DIR,f)
             if os.path.isfile(path):
                 os.remove(path)
     else:
-        os.makedirs(OUTPUT_DIR)
+        os.makedirs(CHAPTER_DIR)
 
     chapter_list=[]
 
     for index,chapter in enumerate(chapters):
         filename=f"{index+1}.txt"
-        path=os.path.join(OUTPUT_DIR,filename)
+        path=os.path.join(CHAPTER_DIR,filename)
 
         with open(path,"w",encoding="utf-8") as f:
             f.write(chapter["content"])
@@ -65,7 +63,7 @@ def save_chapters(chapters):
 def main():
     print("正在读取小说...")
 
-    with open(INPUT_FILE,"r",encoding="utf-8") as f:
+    with open(NOVEL_FILE,"r",encoding="utf-8") as f:
         text=f.read()
 
     print("正在分析章节...")

@@ -1,25 +1,23 @@
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from config import CHAPTER_DIR, client_summary, MODEL_summary, SUMMARY_DIR
+from config import (
+    BIG_SIZE,
+    BIG_SUMMARY_CHARS,
+    CHAPTER_DIR,
+    CHAPTER_SUMMARY_CHARS,
+    MAX_WORKERS,
+    MID_SIZE,
+    MID_SUMMARY_CHARS,
+    SUMMARY_DIR,
+    WHOLE_SUMMARY_CHARS,
+    client_summary,
+    MODEL_summary,
+)
 
 
 # 单章摘要落盘目录
-CHAPTER_SUMMARY_DIR=os.path.join(SUMMARY_DIR,"chapters")
-
-# 分块参数
-MID_SIZE=20          # 每个 mid 覆盖的章节数
-MIDS_PER_BIG=5       # 每个 big 聚合的 mid 数
-BIG_SIZE=MID_SIZE*MIDS_PER_BIG   # 每个 big 覆盖的章节数（100）
-
-# 单章摘要的并发线程数（10 → 一个 20 章的 mid 正好分两批）
-MAX_WORKERS=5
-
-# 各层总结目标字数
-CHAPTER_SUMMARY_CHARS=250
-MID_SUMMARY_CHARS=1000
-BIG_SUMMARY_CHARS=1000
-WHOLE_SUMMARY_CHARS=4000
+CHAPTER_SUMMARY_DIR = SUMMARY_DIR / "chapters"
 
 # 多线程下保证 print 不互相打断
 _print_lock=threading.Lock()

@@ -2,17 +2,8 @@ import os
 import json
 import re
 import ast
-from config import INFO, client, MODEL
+from config import INFO_FILE, MODEL, SHOW_USAGE, USE_SUMMARY_TOOL, client
 from summaries import generate_summary
-
-# ================= 系统提示词切换开关 =================
-# 运行前手动修改此开关，选择使用哪一套系统提示词：
-#   True  ->「鼓励总结」版：提示词会引导 AI 更主动地调用 get_summary 分层总结工具
-#   False ->「不提总结」版：提示词完全不提及总结工具，并从工具列表中移除 get_summary
-USE_SUMMARY_TOOL = True
-SHOW_USAGE = True #是否显示token用量
-# =====================================================
-
 
 from prompts import get_system_prompt
 from novel_tools import AVAILABLE_TOOLS, build_tools, get_title, load_titles
@@ -174,7 +165,11 @@ def chat():
     global messages
 
     while True:
-        user_input=input("\n[user]:")
+        try:
+            user_input=input("\n[user]:")
+        except (EOFError, KeyboardInterrupt):
+            print("\n[chat ended]")
+            break
 
         if user_input.lower() in ["exit","quit",'/exit','/quit']:
             break
@@ -199,7 +194,11 @@ def chat():
             request_args={"model":MODEL,"messages":messages,"tools":tools,"stream":True}
             if SHOW_USAGE:
                 request_args["stream_options"]={"include_usage":True}
-            response=client.chat.completions.create(**request_args)
+            try:
+                response=client.chat.completions.create(**request_args)
+            except Exception as e:
+                print(f"[API error] {e}")
+                break
 
             full_content=""
             tool_calls=[]          # 按 index 累积的工具调用分片
@@ -263,7 +262,22 @@ def chat():
             if tool_calls:
                 for tool_call in tool_calls:
                     name=tool_call["function"]["name"]
-                    args=json.loads(tool_call["function"]["arguments"] or "{}")
+                    try:
+                        args=json.loads(tool_call["function"]["arguments"] or "{}")
+                        if not isinstance(args,dict):
+                            raise ValueError("Tool arguments must be a JSON object.")
+                        if name not in available_tools:
+                            raise ValueError(f"Unknown tool: {name}")
+                    except (json.JSONDecodeError, TypeError, ValueError) as e:
+                        args={}
+                        result=f"Tool execution failed: {e}"
+                        messages.append({
+                            "role":"tool",
+                            "tool_call_id":tool_call["id"],
+                            "content":json.dumps(result,ensure_ascii=False)
+                        })
+                        print(f"[tool error] {result}")
+                        continue
 
                     status=True
 
@@ -276,7 +290,7 @@ def chat():
                     messages.append({
                         "role":"tool",
                         "tool_call_id":tool_call["id"],
-                        "content":json.dumps(result,ensure_ascii=False)
+                        "content":json.dumps(result,ensure_ascii=False,default=str)
                     })
 
                     if status:
@@ -287,7 +301,7 @@ def chat():
             break
 if __name__=="__main__":
     #读取小说的基本信息
-    with open(INFO, "r", encoding="utf-8") as f:
+    with open(INFO_FILE, "r", encoding="utf-8") as f:
             txt = f.read()
     messages.append({
         "role":"system",
