@@ -26,7 +26,7 @@ def read_chapter(chapter_id):
 
     path=os.path.join(CHAPTER_DIR,f"{chapter_id}.txt")
     if not os.path.isfile(path):
-        return None
+        return {"error": f"不存在第 {chapter_id} 章"}
 
     with open(path,"r",encoding="utf-8") as f:
         content=f.read()
@@ -49,7 +49,7 @@ def get_chapter(chapter_id:int):
     """获取指定章节正文"""
     chapter=read_chapter(chapter_id)
     if chapter is None:
-        return f"不存在第 {chapter_id} 章"
+        return {"error": f"不存在第 {chapter_id} 章"}
 
     return chapter["content"]
 
@@ -83,9 +83,12 @@ def search_keyword(keyword:str):
 
 def search_keyword_in_chapter(chapter_id:int, keyword:str):
     """搜索指定章节关键词上下文"""
+    if not keyword:
+        return {"error": "关键词不能为空"}
+    
     chapter=read_chapter(chapter_id)
     if chapter is None:
-        return f"不存在第 {chapter_id} 章"
+        return {"error": f"不存在第 {chapter_id} 章"}
 
     text=chapter["content"]
 
@@ -105,8 +108,9 @@ def search_keyword_in_chapter(chapter_id:int, keyword:str):
             text[left:right]
         )
 
-        # if len(result)>=20:
-        #     break
+        if len(result)>=20:
+            result.append("...（结果过多，已截断）")
+            break
 
         start=index+len(keyword)
 
