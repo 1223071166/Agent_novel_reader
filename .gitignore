@@ -6,3 +6,4 @@ __pycache__/
 summaries/
 vector_db/
 .env
+frontend/node_modules/
