@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Iterator
 
 from config import INFO_FILE, MODEL, SHOW_USAGE, USE_SUMMARY_TOOL, client
-from novel_tools import AVAILABLE_TOOLS, build_tools, load_titles
+from novel_tools import AVAILABLE_TOOLS, build_tools, load_titles,get_chapter_list,get_chapter,search_keyword,search_keyword_in_chapter,semantic_search,get_summary
 from prompts import get_system_prompt
 from usage_stats import get_field, read_usage
 
