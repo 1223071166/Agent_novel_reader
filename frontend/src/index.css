@@ -247,6 +247,22 @@ button {
   text-align: center;
 }
 
+.input-status,
+.input-error {
+  margin: 0 auto 8px;
+  width: min(800px, 100%);
+  font-size: 13px;
+  text-align: center;
+}
+
+.input-status {
+  color: #777;
+}
+
+.input-error {
+  color: #b42318;
+}
+
 .loading {
   display: flex;
   align-items: center;
