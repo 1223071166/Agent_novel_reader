@@ -65,19 +65,11 @@ def iter_chapters():
 def search_keyword(keyword:str):
     """搜索关键词出现的章节"""
     result=[]
-
     for chapter_id, chapter in iter_chapters():
         text=chapter["content"]
-
         count=text.count(keyword)
-
         if count>0:
-            result.append({
-                "chapter":chapter_id,
-                "title":chapter["title"],
-                "count":count
-            })
-
+            result.append(f"第 {chapter_id} 章：{chapter['title']}，出现次数：{count}")
     return result
 
 
@@ -101,26 +93,19 @@ def search_keyword_in_chapter(chapter_id:int, keyword:str):
         if index==-1:
             break
 
-        left=max(0,index-length)
-        right=min(len(text),index+len(keyword)+length)
+        left=max(0,index-length/2)
+        right=min(len(text),index+len(keyword)+length/2)
 
         result.append(
-            text[left:right]
+            text[left:right]+'\n'
         )
 
-        if len(result)>=20:
-            result.append("...（结果过多，已截断）")
-            break
+        # if len(result)>=20:
+        #     result.append("...（结果过多，已截断）")
+        #     break
 
         start=index+len(keyword)
-
-    return {
-        "chapter":chapter_id,
-        "keyword":keyword,
-        "count":text.count(keyword),
-        "contexts":result
-    }
-
+    return f"搜索了第{chapter_id}章({titles.get(chapter_id,'')})内的关键词{keyword},共找到{len(result)}个结果，以下为上下文：\n" + "\n".join(result)
 
 def semantic_search(query:str,n:int=10):
     """使用embedding进行小说语义检索，返回最相关文本片段"""
@@ -134,10 +119,7 @@ def semantic_search(query:str,n:int=10):
     output=[]
 
     for item in results:
-        output.append({
-            "text":item["text"][:500],
-            "metadata":item["metadata"]
-        })
+        output.append(f"第{item["metadata"]["chapter"]}章（{item["metadata"]["title"]}）：\n{item["text"][:500]}\n")
     return output
 
 

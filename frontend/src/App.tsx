@@ -56,6 +56,7 @@ const toolDisplayName = (name: string, args: unknown) => {
 
 const formatToolValue = (value: unknown) => {
   if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(String).join("\n\n");
   return JSON.stringify(value, null, 2) ?? "";
 };
 
@@ -239,12 +240,9 @@ function App() {
                         </summary>
                         <div className="tool-card-body">
                           <div className="tool-field">
-                            <span>参数</span>
-                            <pre>{formatToolValue(tool.arguments)}</pre>
                           </div>
                           {tool.result !== undefined && (
                             <div className="tool-field">
-                              <span>结果</span>
                               <pre>{formatToolValue(tool.result)}</pre>
                             </div>
                           )}
