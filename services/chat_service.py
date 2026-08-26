@@ -15,13 +15,12 @@ from prompts import get_system_prompt
 from usage_stats import get_field, read_usage
 
 
-MAX_TOOL_ROUNDS = 10
+MAX_TOOL_ROUNDS = 100
 
 
 @dataclass(frozen=True)
 class ChatEvent:
     """A transport-neutral event emitted while processing one message."""
-
     event: str
     data: dict[str, Any]
 

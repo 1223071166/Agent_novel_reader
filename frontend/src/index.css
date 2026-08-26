@@ -181,6 +181,72 @@ button {
 .message-row.assistant .message-content {
   flex: 1;
 }
+
+.tool-card {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.tool-card summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 2px 0;
+  color: #555;
+  cursor: pointer;
+  list-style: none;
+}
+
+.tool-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-card summary::before {
+  width: 12px;
+  color: #666;
+  content: ">";
+  font-size: 15px;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.tool-card[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.tool-card-title {
+  color: #555;
+  font-weight: 400;
+}
+
+.tool-card-body {
+  padding: 2px 0 6px 18px;
+  color: #555;
+}
+
+.tool-field {
+  margin-top: 6px;
+}
+
+.tool-field > span {
+  display: block;
+  margin-bottom: 2px;
+  color: #666;
+  font-size: 12px;
+}
+
+.tool-field pre {
+  max-height: 180px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  color: #555;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .message-content {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -250,16 +316,11 @@ button {
   text-align: center;
 }
 
-.input-status,
 .input-error {
   margin: 0 auto 8px;
   width: min(800px, 100%);
   font-size: 13px;
   text-align: center;
-}
-
-.input-status {
-  color: #777;
 }
 
 .input-error {
