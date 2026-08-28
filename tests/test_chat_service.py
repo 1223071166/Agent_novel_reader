@@ -79,6 +79,74 @@ class ChatServiceTests(unittest.TestCase):
         self.assertEqual(len(fake_client.chat.completions.calls), 2)
         self.assertEqual(fake_client.chat.completions.calls[1]["messages"][-1]["role"], "tool")
 
+    def test_multi_round_events_keep_execution_order_and_round_numbers(self):
+        def tool_response(call_id):
+            return [
+                SimpleNamespace(
+                    choices=[SimpleNamespace(delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=[SimpleNamespace(
+                            index=0,
+                            id=call_id,
+                            function=SimpleNamespace(name="get_chapter_list", arguments="{}"),
+                        )],
+                    ))],
+                    usage=None,
+                ),
+                empty_chunk(),
+            ]
+
+        fake_client = FakeClient([
+            tool_response("call-1"),
+            tool_response("call-2"),
+            [text_chunk("最终答案")],
+        ])
+        with patch.object(chat_module, "client", fake_client):
+            service = chat_module.ChatService()
+            events = list(service.stream_message("multi", "请查两次"))
+
+        self.assertEqual(
+            [event.event for event in events],
+            [
+                "message_start",
+                "tool_start",
+                "tool_result",
+                "tool_start",
+                "tool_result",
+                "token",
+                "done",
+            ],
+        )
+        tool_events = [event for event in events if event.event in {"tool_start", "tool_result"}]
+        self.assertEqual([event.data["round"] for event in tool_events], [1, 1, 2, 2])
+        self.assertEqual([event.data["tool_call_id"] for event in tool_events], [
+            "call-1", "call-1", "call-2", "call-2",
+        ])
+
+    def test_tool_error_is_emitted_and_follow_up_can_continue(self):
+        invalid_tool = [
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(
+                    content=None,
+                    tool_calls=[SimpleNamespace(
+                        index=0,
+                        id="bad-call",
+                        function=SimpleNamespace(name="missing_tool", arguments="{}"),
+                    )],
+                ))],
+                usage=None,
+            ),
+            empty_chunk(),
+        ]
+        fake_client = FakeClient([invalid_tool, [text_chunk("已处理错误")]])
+        with patch.object(chat_module, "client", fake_client):
+            service = chat_module.ChatService()
+            events = list(service.stream_message("tool-error", "继续"))
+
+        tool_result = next(event for event in events if event.event == "tool_result")
+        self.assertTrue(tool_result.data["error"])
+        self.assertEqual(events[-1].event, "done")
+
 
 if __name__ == "__main__":
     unittest.main()

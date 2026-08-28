@@ -1,24 +1,14 @@
 import { useState } from "react";
 import { streamChat } from "./api";
+import {
+  applyChatEvent,
+  appendUserItem,
+} from "./chatTimeline";
+import type { TimelineItem } from "./chatTimeline";
 //npm --prefix frontend run dev
-type Message = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  tools?: ToolCall[];
-};
-
-type ToolCall = {
-  id: string;
-  name: string;
-  arguments: unknown;
-  result?: unknown;
-  status: "running" | "completed" | "error";
-};
-
 type Conversation = {
   id: string;
-  messages: Message[];
+  messages: TimelineItem[];
   deleted?: boolean;
 };
 
@@ -81,14 +71,9 @@ function App() {
 
     const conversationIndex = activeIndex;
     const conversationId = activeConversation.id;
-    const assistantId = crypto.randomUUID();
     updateConversation(conversationIndex, (conversation) => ({
         ...conversation,
-        messages: [
-          ...conversation.messages,
-          { id: crypto.randomUUID(), role: "user", content: text },
-        { id: assistantId, role: "assistant", content: "", tools: [] },
-      ],
+        messages: appendUserItem(conversation.messages, text),
     }));
     setInput("");
     setLoading(true);
@@ -96,67 +81,17 @@ function App() {
 
     try {
       await streamChat(conversationId, text, ({ event, data }) => {
-        if (event === "token") {
-          updateConversation(conversationIndex, (conversation) => ({
-            ...conversation,
-            messages: conversation.messages.map((message) => (
-              message.id === assistantId
-                ? { ...message, content: `${message.content}${String(data.content ?? "")}` }
-                : message
-            )),
-          }));
-        } else if (event === "tool_start") {
-          const tool: ToolCall = {
-            id: String(data.tool_call_id ?? crypto.randomUUID()),
-            name: String(data.name ?? "unknown"),
-            arguments: data.arguments ?? {},
-            status: "running",
-          };
-          updateConversation(conversationIndex, (conversation) => ({
-            ...conversation,
-            messages: conversation.messages.map((message) => (
-              message.id === assistantId
-                ? { ...message, tools: [...(message.tools ?? []), tool] }
-                : message
-            )),
-          }));
-        } else if (event === "tool_result") {
-          const toolId = String(data.tool_call_id ?? "");
-          updateConversation(conversationIndex, (conversation) => ({
-            ...conversation,
-            messages: conversation.messages.map((message) => {
-              if (message.id !== assistantId) return message;
-              const existingTools = message.tools ?? [];
-              const found = existingTools.some((tool) => tool.id === toolId);
-              const tools = found
-                ? existingTools.map((tool) => tool.id === toolId
-                  ? {
-                    ...tool,
-                    result: data.result,
-                    status: data.error ? "error" as const : "completed" as const,
-                  }
-                  : tool)
-                : [...existingTools, {
-                  id: toolId || crypto.randomUUID(),
-                  name: String(data.name ?? "unknown"),
-                  arguments: data.arguments ?? {},
-                  result: data.result,
-                  status: data.error ? "error" as const : "completed" as const,
-                }];
-              return { ...message, tools };
-            }),
-          }));
-        } else if (event === "error") {
+        if (event === "error") {
           throw new Error(String(data.message ?? "聊天请求失败"));
         }
+        updateConversation(conversationIndex, (conversation) => ({
+          ...conversation,
+          messages: applyChatEvent(conversation.messages, { event, data }),
+        }));
       });
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "聊天请求失败";
       setError(message);
-      updateConversation(conversationIndex, (conversation) => ({
-        ...conversation,
-        messages: conversation.messages.filter((item) => item.id !== assistantId),
-      }));
     } finally {
       setLoading(false);
     }
@@ -229,27 +164,25 @@ function App() {
             </div>
           ) : (
             <div className="messages">
-              {activeConversation.messages.map((message) => (
-                <div key={message.id} className={`message-row ${message.role}`}>
-                  <div className="avatar">{message.role === "user" ? "你" : "✦"}</div>
+              {activeConversation.messages.map((item) => (
+                <div key={item.id} className={`message-row ${item.type}`}>
+                  <div className="avatar">{item.type === "user" ? "你" : "✦"}</div>
                   <div className="message-content">
-                    {message.role === "assistant" && message.tools?.map((tool) => (
-                      <details className={`tool-card ${tool.status}`} key={tool.id}>
+                    {item.type === "tool" && (
+                      <details className={`tool-card ${item.tool.status}`}>
                         <summary>
-                          <span className="tool-card-title">{toolDisplayName(tool.name, tool.arguments)}</span>
+                          <span className="tool-card-title">{toolDisplayName(item.tool.name, item.tool.arguments)}</span>
                         </summary>
                         <div className="tool-card-body">
-                          <div className="tool-field">
-                          </div>
-                          {tool.result !== undefined && (
+                          {item.tool.result !== undefined && (
                             <div className="tool-field">
-                              <pre>{formatToolValue(tool.result)}</pre>
+                              <pre>{formatToolValue(item.tool.result)}</pre>
                             </div>
                           )}
                         </div>
                       </details>
-                    ))}
-                    {message.content || (loading ? "" : "未收到回复")}
+                    )}
+                    {(item.type === "user" || item.type === "assistant") && item.content}
                   </div>
                 </div>
               ))}

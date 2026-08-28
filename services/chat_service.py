@@ -95,7 +95,7 @@ class ChatService:
             lock.release()
 
     def _run_model(self, conversation_id: str) -> Iterator[ChatEvent]:
-        for _ in range(MAX_TOOL_ROUNDS):
+        for round_index in range(1, MAX_TOOL_ROUNDS + 1):
             request_args: dict[str, Any] = {
                 "model": MODEL,
                 "messages": self._messages_for_request(conversation_id),
@@ -174,7 +174,7 @@ class ChatService:
                 return
 
             for tool_call in tool_calls:
-                yield from self._execute_tool(conversation_id, tool_call)
+                yield from self._execute_tool(conversation_id, tool_call, round_index)
 
         yield ChatEvent("error", {
             "code": "tool_round_limit",
@@ -185,6 +185,7 @@ class ChatService:
         self,
         conversation_id: str,
         tool_call: dict[str, Any],
+        round_index: int,
     ) -> Iterator[ChatEvent]:
         call_id = tool_call.get("id", "")
         function = tool_call.get("function", {})
@@ -201,6 +202,7 @@ class ChatService:
             result: Any = f"Tool execution failed: {exc}"
             self._append_tool_result(conversation_id, call_id, result)
             yield ChatEvent("tool_result", {
+                "round": round_index,
                 "tool_call_id": call_id,
                 "name": name,
                 "arguments": {},
@@ -210,6 +212,7 @@ class ChatService:
             return
 
         yield ChatEvent("tool_start", {
+            "round": round_index,
             "tool_call_id": call_id,
             "name": name,
             "arguments": arguments,
@@ -223,6 +226,7 @@ class ChatService:
 
         self._append_tool_result(conversation_id, call_id, result)
         yield ChatEvent("tool_result", {
+            "round": round_index,
             "tool_call_id": call_id,
             "name": name,
             "arguments": arguments,

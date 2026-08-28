@@ -93,8 +93,8 @@ def search_keyword_in_chapter(chapter_id:int, keyword:str):
         if index==-1:
             break
 
-        left=max(0,index-length/2)
-        right=min(len(text),index+len(keyword)+length/2)
+        left=max(0,index-length//2)
+        right=min(len(text),index+len(keyword)+length//2)
 
         result.append(
             text[left:right]+'\n'
