@@ -9,11 +9,13 @@ export async function streamChat(
   conversationId: string,
   message: string,
   onEvent: (event: ChatEvent) => void,
+  signal: AbortSignal
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ conversation_id: conversationId, message }),
+    signal
   });
 
   if (!response.ok) {
@@ -50,3 +52,12 @@ export async function streamChat(
     if (done) break;
   }
 }
+
+export function cancelStream(conversationId:string){
+  fetch(`${API_BASE_URL}/api/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversation_id: conversationId}),
+  });
+}
+  

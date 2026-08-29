@@ -32,6 +32,7 @@ class ChatService:
         self._conversations: dict[str, list[dict[str, Any]]] = {}
         self._locks: dict[str, threading.Lock] = {}
         self._conversations_lock = threading.Lock()
+        self._cancel_events :dict[str,threading.Event] = {}
 
         with open(INFO_FILE, "r", encoding="utf-8") as file:
             info_text = file.read()
@@ -48,11 +49,17 @@ class ChatService:
             if conversation_id not in self._conversations:
                 self._conversations[conversation_id] = self._copy_initial_messages()
                 self._locks[conversation_id] = threading.Lock()
+                self._cancel_events[conversation_id] = threading.Event()
     
     def delete_conversation(self, conversation_id: str) -> None:
         with self._conversations_lock:
             self._conversations.pop(conversation_id, None)
             self._locks.pop(conversation_id, None)
+            self._cancel_events.pop(conversation_id, None)
+
+    def cancel_conversation(self, conversation_id: str) -> None:
+        with self._conversations_lock:
+            self._cancel_events[conversation_id].set()
 
     def get_messages(self, conversation_id: str) -> list[dict[str, Any]]:
         self.create_conversation(conversation_id)
@@ -66,6 +73,8 @@ class ChatService:
     ) -> Iterator[ChatEvent]:
         self.create_conversation(conversation_id)
         lock = self._locks[conversation_id]
+        cancel_event = threading.Event()
+        self._cancel_events[conversation_id] = cancel_event
         if not lock.acquire(blocking=False):
             yield ChatEvent("error", {
                 "code": "conversation_busy",
@@ -75,6 +84,7 @@ class ChatService:
 
         message_id = str(uuid.uuid4())
         try:
+            print("进入 try:", conversation_id)
             self._append_message(conversation_id, {"role": "user", "content": user_content})
             yield ChatEvent("message_start", {
                 "conversation_id": conversation_id,
@@ -82,7 +92,10 @@ class ChatService:
             })
 
             has_error = False
-            for event in self._run_model(conversation_id):
+            for event in self._run_model(conversation_id, cancel_event):
+                if cancel_event.is_set():
+                    self._cancel_events.pop(conversation_id, None)
+                    return
                 yield event
                 has_error = has_error or event.event == "error"
 
@@ -93,9 +106,16 @@ class ChatService:
                 })
         finally:
             lock.release()
+            print("锁已经释放（finally）:", conversation_id)
 
-    def _run_model(self, conversation_id: str) -> Iterator[ChatEvent]:
+    def _run_model(self, conversation_id: str,cancel_event:threading.Event) -> Iterator[ChatEvent]:
         for round_index in range(1, MAX_TOOL_ROUNDS + 1):
+            if cancel_event.is_set():
+                yield ChatEvent("error", {
+                "code": "user_interreption",
+                "message": "用户终止了这条回答",
+                })
+                return
             request_args: dict[str, Any] = {
                 "model": MODEL,
                 "messages": self._messages_for_request(conversation_id),
@@ -120,6 +140,12 @@ class ChatService:
 
             try:
                 for chunk in response:
+                    if cancel_event.is_set():
+                        yield ChatEvent("error", {
+                        "code": "user_interreption",
+                        "message": "用户终止了这条回答",
+                        })
+                        return
                     if SHOW_USAGE:
                         usage = get_field(chunk, "usage")
                         if usage is not None:

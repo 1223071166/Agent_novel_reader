@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { streamChat } from "./api";
+import { useState, useRef } from "react";
+import { streamChat,cancelStream } from "./api";
 import {
   applyChatEvent,
   appendUserItem,
@@ -55,6 +55,7 @@ function App() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [error, setError] = useState("");
 
   const activeConversation = conversations[activeIndex];
@@ -78,7 +79,7 @@ function App() {
     setInput("");
     setLoading(true);
     setError("");
-
+    abortControllerRef.current = new AbortController();
     try {
       await streamChat(conversationId, text, ({ event, data }) => {
         if (event === "error") {
@@ -88,12 +89,16 @@ function App() {
           ...conversation,
           messages: applyChatEvent(conversation.messages, { event, data }),
         }));
-      });
+      }, abortControllerRef.current.signal);
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "聊天请求失败";
-      setError(message);
+      if(message==="BodyStreamBuffer was aborted")
+        setError("对话已终止");
+      else
+        setError(message);
     } finally {
       setLoading(false);
+      abortControllerRef.current=null
     }
   };
 
@@ -192,7 +197,16 @@ function App() {
 
         <div className="input-area">
           {error && <div className="input-error">{error}</div>}
-          <form className="input-box" onSubmit={(event) => { event.preventDefault(); void sendMessage(); }}>
+          <form className="input-box" onSubmit={(event) => {
+             event.preventDefault();
+             if(loading){
+                abortControllerRef.current?.abort();
+                cancelStream(activeConversation.id);
+             }
+                
+             else
+              void sendMessage(); 
+             }}>
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
@@ -205,7 +219,9 @@ function App() {
                 }
               }}
             />
-            <button className="send-button" type="submit" disabled={!input.trim() || loading || !activeConversation || !!activeConversation.deleted}>↑</button>
+            <button className="send-button" type="submit" disabled={(!input.trim()&&!loading) || !activeConversation || !!activeConversation.deleted}>
+              {loading ? "■" : "↑"}
+            </button>
           </form>
           <div className="input-hint">回答来自小说内容检索，请检查重要信息。</div>
         </div>

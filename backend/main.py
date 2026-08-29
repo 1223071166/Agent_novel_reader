@@ -32,7 +32,8 @@ def health():
 class ChatRequest(BaseModel):
     conversation_id: str
     message: str
-
+class CancelRequest(BaseModel):
+    conversation_id: str
 
 def _sse_stream(events: Iterator[ChatEvent]) -> Iterator[str]:
     for event in events:
@@ -58,3 +59,8 @@ def chat(request: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+@app.post("/api/cancel")
+def cancel_chat(request: CancelRequest):
+    conversation_id = request.conversation_id.strip()
+    chat_service.cancel_conversation(conversation_id)
