@@ -102,8 +102,6 @@ class ChatService:
 
             has_error = False
             for event in self._run_model(conversation_id, cancel_event):
-                if cancel_event.is_set():
-                    return
                 yield event
                 has_error = has_error or event.event == "error"
 

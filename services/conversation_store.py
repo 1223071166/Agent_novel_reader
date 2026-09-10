@@ -9,13 +9,25 @@ from pathlib import Path
 from services.models import Conversation, Message
 
 
+class _ClosingConnection(sqlite3.Connection):
+    """SQLite connection that closes itself after a transaction context ends."""
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 class ConversationStore:
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = str(db_path)
         self._initialize_database()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._db_path)
+        connection = sqlite3.connect(
+            self._db_path,
+            factory=_ClosingConnection,
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
