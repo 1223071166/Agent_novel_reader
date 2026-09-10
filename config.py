@@ -10,15 +10,19 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 # Project files and directories.
-NOVEL_FILE = PROJECT_ROOT / "novel.txt"
-NOVEL_BACKUP_FILE = PROJECT_ROOT / "novel.txt.bak"
-CHAPTER_DIR = PROJECT_ROOT / "chapters"
-CHAPTER_LIST = PROJECT_ROOT / "chapters.txt"
-INFO_FILE = PROJECT_ROOT / "info.txt"
-SUMMARY_DIR = PROJECT_ROOT / "summaries"
-DB_DIR = PROJECT_ROOT / "vector_db"
+DATA_DIR = PROJECT_ROOT / "data"
+BOOK_INFORMATION_DIR = DATA_DIR / "book_information"
+DATABASE_DIR = DATA_DIR / "database"
+
+NOVEL_FILE = BOOK_INFORMATION_DIR / "novel.txt"
+NOVEL_BACKUP_FILE = BOOK_INFORMATION_DIR / "novel.txt.bak"
+CHAPTER_DIR = BOOK_INFORMATION_DIR / "chapters"
+CHAPTER_LIST = BOOK_INFORMATION_DIR / "chapters.txt"
+INFO_FILE = BOOK_INFORMATION_DIR / "info.txt"
+SUMMARY_DIR = BOOK_INFORMATION_DIR / "summaries"
+DB_DIR = DATABASE_DIR / "vector_db"
 VECTOR_COLLECTION_NAME = "novel"
-MESSAGE_STORAGE_FILE = PROJECT_ROOT / "conversations.db"
+MESSAGE_STORAGE_FILE = DATABASE_DIR / "conversations.db"
 # API configuration.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 API_BASE_URL = "https://api.siliconflow.cn/v1"

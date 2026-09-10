@@ -6,7 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from services.chat_service import ChatEvent, ChatService, Conversation
+from services.chat_service import ChatService
+from services.models import ChatEvent, Conversation
 #部署方法： uvicorn backend.main:app --reload
 app = FastAPI()
 chat_service = ChatService()

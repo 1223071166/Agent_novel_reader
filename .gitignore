@@ -1,9 +1,14 @@
-chapters/
-info.txt
-novel.txt
-chapters.txt
 __pycache__/
-summaries/
-vector_db/
 .env
 frontend/node_modules/
+todo
+
+# Local book data and generated databases.
+data/book_information/chapters/
+data/book_information/info.txt
+data/book_information/novel.txt
+data/book_information/novel.txt.bak
+data/book_information/chapters.txt
+data/book_information/summaries/
+data/database/vector_db/
+data/database/conversations.db

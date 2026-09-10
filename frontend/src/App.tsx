@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { deleteConversation as deleteConversationApi, loadConversations, streamChat,cancelStream } from "./api";
 import {
   applyChatEvent,
@@ -56,7 +56,6 @@ function App() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -101,7 +100,6 @@ function App() {
     setInput("");
     setLoading(true);
     setError("");
-    abortControllerRef.current = new AbortController();
     try {
       await streamChat(conversationId, text, ({ event, data }) => {
         if (event === "error") {
@@ -111,16 +109,12 @@ function App() {
           ...conversation,
           messages: applyChatEvent(conversation.messages, { event, data }),
         }));
-      }, abortControllerRef.current.signal);
+      });
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "聊天请求失败";
-      if(message==="BodyStreamBuffer was aborted")
-        setError("对话已终止");
-      else
-        setError(message);
+      setError(message);
     } finally {
       setLoading(false);
-      abortControllerRef.current=null
     }
   };
 
@@ -237,7 +231,6 @@ function App() {
           <form className="input-box" onSubmit={(event) => {
              event.preventDefault();
              if(loading){
-                abortControllerRef.current?.abort();
                 cancelStream(activeConversation.id);
              }
                 

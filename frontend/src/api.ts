@@ -40,14 +40,12 @@ export async function deleteConversation(conversationId: string): Promise<void> 
 export async function streamChat(
   conversationId: string,
   message: string,
-  onEvent: (event: ChatEvent) => void,
-  signal: AbortSignal
+  onEvent: (event: ChatEvent) => void
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversation_id: conversationId, message }),
-    signal
+    body: JSON.stringify({ conversation_id: conversationId, message })
   });
 
   if (!response.ok) {

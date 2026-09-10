@@ -1,195 +1,21 @@
 """Conversation orchestration shared by the CLI and FastAPI."""
 
 from __future__ import annotations
-import sqlite3
-from pathlib import Path
 import json
 import threading
 import uuid
 import copy
-from dataclasses import dataclass, field
 from typing import Any, Iterator
 
 from config import INFO_FILE, MODEL, SHOW_USAGE, USE_SUMMARY_TOOL,MESSAGE_STORAGE_FILE,client
 from novel_tools import AVAILABLE_TOOLS, build_tools, load_titles,get_chapter_list,get_chapter,search_keyword,search_keyword_in_chapter,semantic_search,get_summary
 from prompts import get_system_prompt
 from usage_stats import get_field, read_usage
+from services.conversation_store import ConversationStore
+from services.models import ChatEvent, Conversation, Message
 
 
 MAX_TOOL_ROUNDS = 100
-
-
-@dataclass(frozen=True)
-class ChatEvent:
-    """A transport-neutral event emitted while processing one message."""
-    event: str
-    data: dict[str, Any]
-
-@dataclass
-class Message:
-    id: str
-    role: str
-    content: str | None = None
-    tool_calls: list[dict[str, Any]] | None = None
-    tool_call_id: str | None = None
-
-@dataclass
-class Conversation:
-    id: str
-    messages: list[Message] = field(default_factory=list)
-
-class ConversationStore:
-    def __init__(self, db_path: str | Path) -> None:
-        self._db_path = str(db_path)
-        self._initialize_database()
-
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self._db_path)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
-
-    def _initialize_database(self) -> None:
-        with self._connect() as connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS conversations (
-                    id TEXT PRIMARY KEY
-                );
-
-                CREATE TABLE IF NOT EXISTS messages (
-                    id TEXT PRIMARY KEY,
-                    conversation_id TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    content TEXT,
-                    tool_calls TEXT,
-                    tool_call_id TEXT,
-                    FOREIGN KEY (conversation_id)
-                        REFERENCES conversations(id)
-                        ON DELETE CASCADE
-                );
-                """
-            )
-
-    def create_conversation(self, conversation_id: str) -> None:
-        with self._connect() as connection:
-            connection.execute(
-                "INSERT OR IGNORE INTO conversations (id) VALUES (?)",
-                (conversation_id,),
-            )
-
-    def save_message(self, conversation_id: str, message: Message) -> None:
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT OR REPLACE INTO messages (
-                    id,
-                    conversation_id,
-                    role,
-                    content,
-                    tool_calls,
-                    tool_call_id
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    message.id,
-                    conversation_id,
-                    message.role,
-                    message.content,
-                    json.dumps(message.tool_calls, ensure_ascii=False)
-                    if message.tool_calls is not None
-                    else None,
-                    message.tool_call_id,
-                ),
-            )
-
-    def load_conversation(self, conversation_id: str) -> Conversation | None:
-        with self._connect() as connection:
-            conversation_row = connection.execute(
-                "SELECT id FROM conversations WHERE id = ?",
-                (conversation_id,),
-            ).fetchone()
-
-            if conversation_row is None:
-                return None
-
-            rows = connection.execute(
-                """
-                SELECT id, role, content, tool_calls, tool_call_id
-                FROM messages
-                WHERE conversation_id = ?
-                ORDER BY rowid
-                """,
-                (conversation_id,),
-            ).fetchall()
-
-        messages: list[Message] = []
-        for row in rows:
-            tool_calls = (
-                json.loads(row["tool_calls"])
-                if row["tool_calls"] is not None
-                else None
-            )
-
-            messages.append(
-                Message(
-                    id=row["id"],
-                    role=row["role"],
-                    content=row["content"],
-                    tool_calls=tool_calls,
-                    tool_call_id=row["tool_call_id"],
-                )
-            )
-
-        return Conversation(
-            id=conversation_row["id"],
-            messages=messages,
-        )
-
-    def load_all_conversations(self) -> dict[str,Conversation]:
-        with self._connect() as connection:
-            conversation_rows = connection.execute(
-                "SELECT id FROM conversations ORDER BY rowid"
-            ).fetchall()
-
-            message_rows = connection.execute(
-                """
-                SELECT id, conversation_id, role, content, tool_calls, tool_call_id
-                FROM messages
-                ORDER BY conversation_id, rowid
-                """
-            ).fetchall()
-
-        conversations = {
-            row["id"]: Conversation(id=row["id"])
-            for row in conversation_rows
-        }
-
-        for row in message_rows:
-            tool_calls = (
-                json.loads(row["tool_calls"])
-                if row["tool_calls"] is not None
-                else None
-            )
-
-            message = Message(
-                id=row["id"],
-                role=row["role"],
-                content=row["content"],
-                tool_calls=tool_calls,
-                tool_call_id=row["tool_call_id"],
-            )
-            conversations[row["conversation_id"]].messages.append(message)
-
-        return conversations
-
-    def delete_conversation(self, conversation_id: str) -> None:
-        with self._connect() as connection:
-            connection.execute(
-                "DELETE FROM conversations WHERE id = ?",
-                (conversation_id,),
-            )
 
 
 class ChatService:
@@ -214,8 +40,8 @@ class ChatService:
             info_text = file.read()
 
         self._initial_messages = [
-            Message(id="001", role="system", content=get_system_prompt(USE_SUMMARY_TOOL)),
-            Message(id="002", role="system", content="这是小说的基本信息：" + info_text),
+            Message(id="not created", role="system", content=get_system_prompt(USE_SUMMARY_TOOL)),
+            Message(id="not created", role="system", content="这是小说的基本信息：" + info_text),
         ]
         load_titles()
 
@@ -223,7 +49,7 @@ class ChatService:
         with self._conversations_lock:
             if conversation_id not in self._conversations:
                 self._store.create_conversation(conversation_id)
-                messages = self._copy_initial_messages()
+                messages = self._create_initial_messages()
                 self._conversations[conversation_id] = Conversation(
                     id=conversation_id,
                     messages=messages,
@@ -481,32 +307,13 @@ class ChatService:
             request_message["tool_call_id"] = message.tool_call_id
         return request_message
 
-    def _copy_initial_messages(self) -> list[Message]:
-        return copy.deepcopy(self._initial_messages)
+    def _create_initial_messages(self) -> list[Message]:
+        messages = copy.deepcopy(self._initial_messages)
+        for message in messages:
+            message.id = str(uuid.uuid4())
+        return messages
 
     def get_conversations(self) -> list[Conversation]:
         """Return a snapshot of all persisted conversations for the API layer."""
         with self._conversations_lock:
             return copy.deepcopy(list(self._conversations.values()))
-
-
-#python -m services.chat_service
-if __name__ == "__main__":
-    store = ConversationStore(MESSAGE_STORAGE_FILE)
-    store.create_conversation("test_conversation")
-    store.save_message(
-        "test_conversation",
-        Message(id="1", role="user", content="Hello"),
-    )
-    store.save_message(
-        "test_conversation",
-        Message(id="2", role="assistant", content="Hi there!"),
-    )
-
-    conversation = store.load_conversation("test_conversation")
-    print(conversation)
-
-    all_conversations = store.load_all_conversations()
-    print(all_conversations)
-
-    store.delete_conversation("test_conversation")

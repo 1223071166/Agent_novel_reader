@@ -3,8 +3,8 @@ import re
 
 from config import CHAPTER_DIR, CHAPTER_LIST
 from summaries import get_summary
-
-embedding_search = None
+from embedding import search
+embedding_search = search
 
 chapter_cache={}
 titles={}
@@ -16,7 +16,6 @@ def load_titles():
         match=re.match(r"(\d+)，?(.*)",line)
         if match:
             titles[int(match.group(1))]=match.group(2).strip()
-
 
 
 def read_chapter(chapter_id):
@@ -36,7 +35,6 @@ def read_chapter(chapter_id):
         "content":content
     }
     return chapter
-
 
 #可用工具
 def get_chapter_list():
@@ -110,9 +108,6 @@ def search_keyword_in_chapter(chapter_id:int, keyword:str):
 def semantic_search(query:str,n:int=10):
     """使用embedding进行小说语义检索，返回最相关文本片段"""
     global embedding_search
-    if embedding_search is None:
-        from embedding import search
-        embedding_search = search
 
     results=embedding_search(query,n=n)
 
