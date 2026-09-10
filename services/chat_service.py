@@ -1,7 +1,8 @@
 """Conversation orchestration shared by the CLI and FastAPI."""
 
 from __future__ import annotations
-
+import sqlite3
+from pathlib import Path
 import json
 import threading
 import uuid
@@ -9,7 +10,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
-from config import INFO_FILE, MODEL, SHOW_USAGE, USE_SUMMARY_TOOL, client
+from config import INFO_FILE, MODEL, SHOW_USAGE, USE_SUMMARY_TOOL,MESSAGE_STORAGE_FILE,client
 from novel_tools import AVAILABLE_TOOLS, build_tools, load_titles,get_chapter_list,get_chapter,search_keyword,search_keyword_in_chapter,semantic_search,get_summary
 from prompts import get_system_prompt
 from usage_stats import get_field, read_usage
@@ -37,15 +38,177 @@ class Conversation:
     id: str
     messages: list[Message] = field(default_factory=list)
 
+class ConversationStore:
+    def __init__(self, db_path: str | Path) -> None:
+        self._db_path = str(db_path)
+        self._initialize_database()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self._db_path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+
+    def _initialize_database(self) -> None:
+        with self._connect() as connection:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS conversations (
+                    id TEXT PRIMARY KEY
+                );
+
+                CREATE TABLE IF NOT EXISTS messages (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT,
+                    tool_calls TEXT,
+                    tool_call_id TEXT,
+                    FOREIGN KEY (conversation_id)
+                        REFERENCES conversations(id)
+                        ON DELETE CASCADE
+                );
+                """
+            )
+
+    def create_conversation(self, conversation_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO conversations (id) VALUES (?)",
+                (conversation_id,),
+            )
+
+    def save_message(self, conversation_id: str, message: Message) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO messages (
+                    id,
+                    conversation_id,
+                    role,
+                    content,
+                    tool_calls,
+                    tool_call_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    message.id,
+                    conversation_id,
+                    message.role,
+                    message.content,
+                    json.dumps(message.tool_calls, ensure_ascii=False)
+                    if message.tool_calls is not None
+                    else None,
+                    message.tool_call_id,
+                ),
+            )
+
+    def load_conversation(self, conversation_id: str) -> Conversation | None:
+        with self._connect() as connection:
+            conversation_row = connection.execute(
+                "SELECT id FROM conversations WHERE id = ?",
+                (conversation_id,),
+            ).fetchone()
+
+            if conversation_row is None:
+                return None
+
+            rows = connection.execute(
+                """
+                SELECT id, role, content, tool_calls, tool_call_id
+                FROM messages
+                WHERE conversation_id = ?
+                ORDER BY rowid
+                """,
+                (conversation_id,),
+            ).fetchall()
+
+        messages: list[Message] = []
+        for row in rows:
+            tool_calls = (
+                json.loads(row["tool_calls"])
+                if row["tool_calls"] is not None
+                else None
+            )
+
+            messages.append(
+                Message(
+                    id=row["id"],
+                    role=row["role"],
+                    content=row["content"],
+                    tool_calls=tool_calls,
+                    tool_call_id=row["tool_call_id"],
+                )
+            )
+
+        return Conversation(
+            id=conversation_row["id"],
+            messages=messages,
+        )
+
+    def load_all_conversations(self) -> dict[str,Conversation]:
+        with self._connect() as connection:
+            conversation_rows = connection.execute(
+                "SELECT id FROM conversations ORDER BY rowid"
+            ).fetchall()
+
+            message_rows = connection.execute(
+                """
+                SELECT id, conversation_id, role, content, tool_calls, tool_call_id
+                FROM messages
+                ORDER BY conversation_id, rowid
+                """
+            ).fetchall()
+
+        conversations = {
+            row["id"]: Conversation(id=row["id"])
+            for row in conversation_rows
+        }
+
+        for row in message_rows:
+            tool_calls = (
+                json.loads(row["tool_calls"])
+                if row["tool_calls"] is not None
+                else None
+            )
+
+            message = Message(
+                id=row["id"],
+                role=row["role"],
+                content=row["content"],
+                tool_calls=tool_calls,
+                tool_call_id=row["tool_call_id"],
+            )
+            conversations[row["conversation_id"]].messages.append(message)
+
+        return conversations
+
+    def delete_conversation(self, conversation_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM conversations WHERE id = ?",
+                (conversation_id,),
+            )
+
 
 class ChatService:
     def __init__(self) -> None:
+        self._store = ConversationStore(MESSAGE_STORAGE_FILE)
         self._tools = build_tools(USE_SUMMARY_TOOL)
         self._available_tools = AVAILABLE_TOOLS
-        self._conversations: dict[str, Conversation] = {}
-        self._locks: dict[str, threading.Lock] = {}
+
+        self._conversations: dict[str, Conversation] = self._store.load_all_conversations()
+        self._locks: dict[str, threading.Lock] = {
+            conversation_id: threading.Lock()
+            for conversation_id in self._conversations
+        }
+
+        self._cancel_events: dict[str, threading.Event] = {
+            conversation_id: threading.Event()
+            for conversation_id in self._conversations
+        }
         self._conversations_lock = threading.Lock()
-        self._cancel_events :dict[str,threading.Event] = {}
 
         with open(INFO_FILE, "r", encoding="utf-8") as file:
             info_text = file.read()
@@ -57,23 +220,31 @@ class ChatService:
         load_titles()
 
     def create_conversation(self, conversation_id: str) -> None:
-        #惰性加载，对话不存在时就新建对话
         with self._conversations_lock:
             if conversation_id not in self._conversations:
-                mes = self._copy_initial_messages()
-                self._conversations[conversation_id] = Conversation(id=conversation_id, messages=mes)
+                self._store.create_conversation(conversation_id)
+                messages = self._copy_initial_messages()
+                self._conversations[conversation_id] = Conversation(
+                    id=conversation_id,
+                    messages=messages,
+                )
+                for message in messages:
+                    self._store.save_message(conversation_id, message)
                 self._locks[conversation_id] = threading.Lock()
                 self._cancel_events[conversation_id] = threading.Event()
     
     def delete_conversation(self, conversation_id: str) -> None:
         with self._conversations_lock:
+            self._store.delete_conversation(conversation_id)
             self._conversations.pop(conversation_id, None)
             self._locks.pop(conversation_id, None)
             self._cancel_events.pop(conversation_id, None)
 
     def cancel_conversation(self, conversation_id: str) -> None:
         with self._conversations_lock:
-            self._cancel_events[conversation_id].set()
+            cancel_event = self._cancel_events.get(conversation_id)
+            if cancel_event is not None:
+                cancel_event.set()
 
     def stream_message(
         self,
@@ -153,6 +324,11 @@ class ChatService:
             try:
                 for chunk in response:
                     if cancel_event.is_set():
+                        self._append_message(conversation_id, Message(
+                            id=str(uuid.uuid4()),
+                            role="assistant",
+                            content=full_content or None,
+                        ))
                         yield ChatEvent("error", {
                         "code": "user_interreption",
                         "message": "用户终止了这条回答",
@@ -287,6 +463,7 @@ class ChatService:
     def _append_message(self, conversation_id: str, message: Message) -> None:
         with self._conversations_lock:
             self._conversations[conversation_id].messages.append(message)
+            self._store.save_message(conversation_id, message)
 
     def _messages_for_request(self, conversation_id: str) -> list[dict[str, Any]]:
         with self._conversations_lock:
@@ -306,3 +483,30 @@ class ChatService:
 
     def _copy_initial_messages(self) -> list[Message]:
         return copy.deepcopy(self._initial_messages)
+
+    def get_conversations(self) -> list[Conversation]:
+        """Return a snapshot of all persisted conversations for the API layer."""
+        with self._conversations_lock:
+            return copy.deepcopy(list(self._conversations.values()))
+
+
+#python -m services.chat_service
+if __name__ == "__main__":
+    store = ConversationStore(MESSAGE_STORAGE_FILE)
+    store.create_conversation("test_conversation")
+    store.save_message(
+        "test_conversation",
+        Message(id="1", role="user", content="Hello"),
+    )
+    store.save_message(
+        "test_conversation",
+        Message(id="2", role="assistant", content="Hi there!"),
+    )
+
+    conversation = store.load_conversation("test_conversation")
+    print(conversation)
+
+    all_conversations = store.load_all_conversations()
+    print(all_conversations)
+
+    store.delete_conversation("test_conversation")

@@ -5,6 +5,38 @@ export type ChatEvent = {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
+export type SavedMessage = {
+  id: string;
+  role: string;
+  content: string | null;
+  tool_calls: Array<{
+    id?: string;
+    type?: string;
+    function?: { name?: string; arguments?: string };
+  }> | null;
+  tool_call_id: string | null;
+};
+
+export type SavedConversation = {
+  id: string;
+  messages: SavedMessage[];
+};
+
+export async function loadConversations(): Promise<SavedConversation[]> {
+  const response = await fetch(`${API_BASE_URL}/api/conversations`);
+  if (!response.ok) throw new Error(`加载历史会话失败（${response.status}）`);
+  const body = await response.json() as { conversations?: SavedConversation[] };
+  return body.conversations ?? [];
+}
+
+export async function deleteConversation(conversationId: string): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/conversations/${encodeURIComponent(conversationId)}`,
+    { method: "DELETE" },
+  );
+  if (!response.ok) throw new Error(`删除会话失败（${response.status}）`);
+}
+
 export async function streamChat(
   conversationId: string,
   message: string,

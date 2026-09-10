@@ -1,8 +1,9 @@
-import { useState, useRef } from "react";
-import { streamChat,cancelStream } from "./api";
+import { useState, useRef, useEffect } from "react";
+import { deleteConversation as deleteConversationApi, loadConversations, streamChat,cancelStream } from "./api";
 import {
   applyChatEvent,
   appendUserItem,
+  timelineFromConversation,
 } from "./chatTimeline";
 import type { TimelineItem } from "./chatTimeline";
 //npm --prefix frontend run dev
@@ -58,6 +59,27 @@ function App() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    let cancelled = false;
+    void loadConversations()
+      .then((savedConversations) => {
+        if (cancelled) return;
+        setConversations(savedConversations.length > 0
+          ? savedConversations.map((conversation) => ({
+              id: conversation.id,
+              messages: timelineFromConversation(conversation),
+            }))
+          : [makeConversation()]);
+        setActiveIndex(0);
+      })
+      .catch((requestError) => {
+        if (!cancelled) {
+          setError(requestError instanceof Error ? requestError.message : "加载历史会话失败");
+        }
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   const activeConversation = conversations[activeIndex];
 
   const updateConversation = (index: number, update: (conversation: Conversation) => Conversation) => {
@@ -109,9 +131,23 @@ function App() {
     setError("");
   };
 
-  const deleteConversation = (index: number) => {
-    updateConversation(index, (conversation) => ({ ...conversation, deleted: true }));
-    if (index === activeIndex) setError("");
+  const deleteConversation = async (index: number) => {
+    const conversation = conversations[index];
+    if (!conversation) return;
+
+    try {
+      await deleteConversationApi(conversation.id);
+      updateConversation(index, (currentConversation) => ({ ...currentConversation, deleted: true }));
+      if (index === activeIndex) {
+        const nextIndex = conversations.findIndex(
+          (item, itemIndex) => itemIndex !== index && !item.deleted,
+        );
+        setActiveIndex(nextIndex);
+        setError("");
+      }
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "删除会话失败");
+    }
   };
 
   return (
@@ -134,9 +170,10 @@ function App() {
                 <span>对话 {index + 1}</span>
                 <button
                   className="delete-chat"
+                  disabled={loading && index === activeIndex}
                   onClick={(event) => {
                     event.stopPropagation();
-                    deleteConversation(index);
+                    void deleteConversation(index);
                   }}
                 >
                   ×

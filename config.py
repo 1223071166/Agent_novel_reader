@@ -18,7 +18,7 @@ INFO_FILE = PROJECT_ROOT / "info.txt"
 SUMMARY_DIR = PROJECT_ROOT / "summaries"
 DB_DIR = PROJECT_ROOT / "vector_db"
 VECTOR_COLLECTION_NAME = "novel"
-
+MESSAGE_STORAGE_FILE = PROJECT_ROOT / "conversations.db"
 # API configuration.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 API_BASE_URL = "https://api.siliconflow.cn/v1"

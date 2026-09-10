@@ -1,3 +1,5 @@
+import type { SavedConversation } from "./api";
+
 export type ToolStatus = "running" | "completed" | "error";
 
 export type ToolCall = {
@@ -31,6 +33,58 @@ export type TimelineEvent = {
 };
 
 const newId = () => crypto.randomUUID();
+
+function parseToolResult(content: string | null): unknown {
+  if (content === null) return undefined;
+  try {
+    return JSON.parse(content);
+  } catch {
+    return content;
+  }
+}
+
+export function timelineFromConversation(conversation: SavedConversation): TimelineItem[] {
+  const items: TimelineItem[] = [];
+  const toolCalls = new Map<string, { name: string; arguments: unknown }>();
+
+  for (const message of conversation.messages) {
+    if (message.role === "user" && message.content !== null) {
+      items.push({ id: message.id, type: "user", content: message.content });
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      for (const call of message.tool_calls ?? []) {
+        const id = String(call.id ?? "");
+        if (id) {
+          let args: unknown = call.function?.arguments ?? "{}";
+          try { args = JSON.parse(String(args)); } catch { /* keep raw arguments */ }
+          toolCalls.set(id, { name: String(call.function?.name ?? "unknown"), arguments: args });
+        }
+      }
+      if (message.content !== null && message.content !== "") {
+        items.push({ id: message.id, type: "assistant", content: message.content });
+      }
+      continue;
+    }
+
+    if (message.role === "tool") {
+      const call = toolCalls.get(message.tool_call_id ?? "");
+      items.push({
+        id: message.id,
+        type: "tool",
+        tool: {
+          id: message.tool_call_id ?? newId(),
+          name: call?.name ?? "unknown",
+          arguments: call?.arguments ?? {},
+          result: parseToolResult(message.content),
+          status: "completed",
+        },
+      });
+    }
+  }
+  return items;
+}
 
 export function appendUserItem(items: TimelineItem[], content: string): TimelineItem[] {
   return [
