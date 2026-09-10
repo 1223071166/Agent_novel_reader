@@ -147,12 +147,21 @@ function App() {
   return (
     <div className="app">
       <aside className="sidebar">
+        <div className="sidebar-brand">
+          <div className="brand-mark">✦</div>
+          <div>
+            <div className="brand-name">AgentReader</div>
+            <div className="brand-caption">小说阅读助手</div>
+          </div>
+        </div>
+
         <button className="new-chat" onClick={createConversation}>
-          <span>＋</span>
-          新建聊天
+          <span className="new-chat-icon">＋</span>
+          <span>新建聊天</span>
         </button>
 
         <div className="conversation-list">
+          <div className="sidebar-section-label">最近对话</div>
           {conversations.map((conversation, index) => (
             !conversation.deleted && (
               <div
@@ -160,11 +169,13 @@ function App() {
                 className={`conversation ${index === activeIndex ? "active" : ""}`}
                 onClick={() => setActiveIndex(index)}
               >
-                <span>💬</span>
-                <span>对话 {index + 1}</span>
+                <span className="conversation-icon">✧</span>
+                <span className="conversation-name">对话 {index + 1}</span>
                 <button
                   className="delete-chat"
                   disabled={loading && index === activeIndex}
+                  aria-label={`删除对话 ${index + 1}`}
+                  title="删除对话"
                   onClick={(event) => {
                     event.stopPropagation();
                     void deleteConversation(index);
@@ -178,25 +189,21 @@ function App() {
         </div>
 
         <div className="sidebar-bottom">
-          <div className="sidebar-item">⚙ 设置</div>
-          <div className="sidebar-item">👤 用户</div>
+          <div className="sidebar-item"><span>⚙</span> 设置</div>
+          <div className="sidebar-item"><span>◉</span> 本地模式</div>
         </div>
       </aside>
 
       <main className="main">
-        <header className="topbar">
-          <span className="model-name">AgentReader</span>
-          <span className="model-arrow">⌄</span>
-        </header>
-
         <section className="chat">
           {!activeConversation || activeConversation.deleted ? (
             <div className="empty-state"><h1>这个对话已删除</h1></div>
           ) : activeConversation.messages.length === 0 ? (
             <div className="empty-state">
-              <div className="logo">✦</div>
+              <div className="empty-logo"><span>✦</span></div>
+              <div className="empty-eyebrow">AgentReader</div>
               <h1>有什么可以帮忙的？</h1>
-              <p>输入一条消息，开始你的对话。</p>
+              <p>从小说内容中检索细节，开始一段新的探索。</p>
             </div>
           ) : (
             <div className="messages">
@@ -253,7 +260,7 @@ function App() {
               {loading ? "■" : "↑"}
             </button>
           </form>
-          <div className="input-hint">回答来自小说内容检索，请检查重要信息。</div>
+          <div className="input-hint"><span>✦</span> 回答来自小说内容检索，请检查重要信息。</div>
         </div>
       </main>
     </div>
