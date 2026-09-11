@@ -5,8 +5,8 @@ from FlagEmbedding import FlagAutoModel
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from config import (
-    CHAPTER_DIR,
-    DB_DIR,
+    BOOK_ID,
+    BookPaths,
     EMBEDDING_BATCH_SIZE,
     EMBEDDING_CHUNK_OVERLAP,
     EMBEDDING_CHUNK_SIZE,
@@ -48,28 +48,29 @@ def get_reranker():
     return _reranker_tokenizer, _reranker_model
 
 
-_collection=None
-def get_collection():
-    global _collection
-    if _collection is None:
-        client=chromadb.PersistentClient(
-            path=DB_DIR
-        )
-        _collection=client.get_or_create_collection(
+_collections={}
+def get_collection(book_path: BookPaths):
+    """获取指定小说的向量集合。"""
+    db_dir = book_path.vector_db_dir
+
+    db_key = str(db_dir.resolve())
+    if db_key not in _collections:
+        client=chromadb.PersistentClient(path=db_dir)
+        _collections[db_key]=client.get_or_create_collection(
             name=VECTOR_COLLECTION_NAME
         )
-    return _collection
+    return _collections[db_key]
 
 
-def reset_db():
-    """删除向量库。必须在任何 chromadb 连接建立之前调用。"""
-    global _collection
-    if _collection is not None:
+def reset_db(book_path: BookPaths):
+    """删除指定小说的向量库，必须在连接建立之前调用。"""
+    db_key = str(book_path.vector_db_dir.resolve())
+    if db_key in _collections:
         raise RuntimeError(
             "向量库已经被连接，无法安全删除。请在调用 search/build_embedding 之前执行 reset_db。"
         )
     shutil.rmtree(
-        DB_DIR,
+        book_path.vector_db_dir,
         ignore_errors=True
     )
 
@@ -100,13 +101,14 @@ def split_text(text,size=EMBEDDING_CHUNK_SIZE,overlap=EMBEDDING_CHUNK_OVERLAP):
         for i in range(0,len(text),step)
     ]
 
-def build_embedding():
+def build_embedding(book_path: BookPaths):
+    chapter_dir = book_path.chapter_dir
 
     ids=[]
     documents=[]
     metadatas=[]
 
-    for filename in os.listdir(CHAPTER_DIR):
+    for filename in os.listdir(chapter_dir):
 
         if not filename.endswith(".txt"):
             continue
@@ -114,7 +116,7 @@ def build_embedding():
         chapter_id=filename[:-4]
 
         with open(
-            os.path.join(CHAPTER_DIR,filename),
+            os.path.join(chapter_dir,filename),
             encoding="utf-8"
         ) as f:
             text=f.read()
@@ -147,7 +149,7 @@ def build_embedding():
     )
 
 
-    collection=get_collection()
+    collection=get_collection(book_path)
     for i in range(0,len(ids),VECTOR_DB_BATCH_SIZE):
         collection.add(
             ids=ids[i:i+VECTOR_DB_BATCH_SIZE],
@@ -159,20 +161,26 @@ def build_embedding():
     print("embedding完成")
 
 
-def search(query,n=SEMANTIC_SEARCH_DEFAULT_N,top_k=SEMANTIC_SEARCH_TOP_K):
+def search(query,book_path: BookPaths,n=SEMANTIC_SEARCH_DEFAULT_N,top_k=SEMANTIC_SEARCH_TOP_K):
+    collection = get_collection(book_path)
+    if collection.count() == 0:
+        return []
+
     vector=get_model().encode_queries(
         [query]
     )[0]
 
-    result=get_collection().query(
+    result=collection.query(
         query_embeddings=[
             vector.tolist()
         ],
         n_results=top_k
     )
 
-    documents=result["documents"][0]
-    metadatas=result["metadatas"][0]
+    documents=(result.get("documents") or [[]])[0]
+    metadatas=(result.get("metadatas") or [[]])[0]
+    if not documents or not metadatas:
+        return []
 
     scores=rerank(query, documents)
 
@@ -194,10 +202,10 @@ def search(query,n=SEMANTIC_SEARCH_DEFAULT_N,top_k=SEMANTIC_SEARCH_TOP_K):
 
 if __name__=="__main__":
     #第一次运行取消注释
-    #reset_db()
-    #build_embedding()
+    #reset_db(BookPaths(BOOK_ID))
+    #build_embedding(BookPaths(BOOK_ID))
 
-    for item in search("程斌初次遇见文雯"):
+    for item in search("程斌初次遇见文雯", BookPaths(BOOK_ID)):
         meta=item["metadata"]
         print(
             f"\nscore={item['score']:.4f} chapter={meta['chapter']} chunk={meta['chunk']} title={meta['title']}\n"

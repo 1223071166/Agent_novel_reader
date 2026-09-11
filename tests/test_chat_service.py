@@ -86,7 +86,7 @@ class ChatServiceTests(unittest.TestCase):
 
     @staticmethod
     def print_success(message):
-        print(f"✓ {message}", flush=True)
+        print(f"[OK] {message}", flush=True)
 
     def test_normal_response_streams_tokens_and_persists_messages(self):
         fake_client = FakeClient([
@@ -136,7 +136,7 @@ class ChatServiceTests(unittest.TestCase):
         with patch.object(
             chat_module,
             "AVAILABLE_TOOLS",
-            {"get_chapter_list": lambda: "第一章"},
+            {"get_chapter_list": lambda book_path: "第一章"},
         ), patch.object(chat_module, "client", fake_client):
             service = chat_module.ChatService()
             events = list(service.stream_message("tool", "列出章节"))

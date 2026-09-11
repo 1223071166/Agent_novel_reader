@@ -7,8 +7,8 @@ import uuid
 import copy
 from typing import Any, Iterator
 
-from config import INFO_FILE, MODEL, SHOW_USAGE, USE_SUMMARY_TOOL,MESSAGE_STORAGE_FILE,client
-from novel_tools import AVAILABLE_TOOLS, build_tools, load_titles,get_chapter_list,get_chapter,search_keyword,search_keyword_in_chapter,semantic_search,get_summary
+from config import MODEL, SHOW_USAGE, USE_SUMMARY_TOOL,MESSAGE_STORAGE_FILE,client,BOOK_ID,BookPaths
+from novel_tools import AVAILABLE_TOOLS, build_tools, load_titles
 from prompts import get_system_prompt
 from usage_stats import get_field, read_usage
 from services.conversation_store import ConversationStore
@@ -19,8 +19,10 @@ MAX_TOOL_ROUNDS = 100
 
 
 class ChatService:
-    def __init__(self) -> None:
-        self._store = ConversationStore(MESSAGE_STORAGE_FILE)
+    def __init__(self,book_id=BOOK_ID) -> None:
+        self._book_path=BookPaths(book_id)
+
+        self._store = ConversationStore(MESSAGE_STORAGE_FILE) #数据库未来也要改成每个小说存一份
         self._tools = build_tools(USE_SUMMARY_TOOL)
         self._available_tools = AVAILABLE_TOOLS
 
@@ -29,21 +31,20 @@ class ChatService:
             conversation_id: threading.Lock()
             for conversation_id in self._conversations
         }
-
         self._cancel_events: dict[str, threading.Event] = {
             conversation_id: threading.Event()
             for conversation_id in self._conversations
         }
         self._conversations_lock = threading.Lock()
 
-        with open(INFO_FILE, "r", encoding="utf-8") as file:
+        with open(self._book_path.info_file, "r", encoding="utf-8") as file:
             info_text = file.read()
 
         self._initial_messages = [
             Message(id="not created", role="system", content=get_system_prompt(USE_SUMMARY_TOOL)),
             Message(id="not created", role="system", content="这是小说的基本信息：" + info_text),
         ]
-        load_titles()
+        load_titles(self._book_path)
 
     def create_conversation(self, conversation_id: str) -> None:
         with self._conversations_lock:
@@ -90,7 +91,7 @@ class ChatService:
         self._cancel_events[conversation_id] = cancel_event
         message_id = str(uuid.uuid4())
         try:
-            print("进入 try:", conversation_id)
+            #print("进入 try:", conversation_id)
             self._append_message(
                 conversation_id,
                 Message(id=message_id, role="user", content=user_content),
@@ -113,7 +114,7 @@ class ChatService:
         finally:
             self._cancel_events.pop(conversation_id, None)
             lock.release()
-            print("锁已经释放（finally）:", conversation_id)
+            #print("锁已经释放（finally）:", conversation_id)
 
     def _run_model(self, conversation_id: str,cancel_event:threading.Event) -> Iterator[ChatEvent]:
         for round_index in range(1, MAX_TOOL_ROUNDS + 1):
@@ -257,7 +258,10 @@ class ChatService:
             "arguments": arguments,
         })
         try:
-            result = self._available_tools[name](**arguments)
+            result = self._available_tools[name](
+                book_path=self._book_path,
+                **arguments,
+            )
             is_error = False
         except Exception as exc:
             result = f"工具执行失败:{exc}"

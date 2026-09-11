@@ -1,0 +1,4 @@
+npm --prefix frontend run dev
+uvicorn backend.main:app --reload
+python -m unittest discover -s tests -v
+npm --prefix frontend test

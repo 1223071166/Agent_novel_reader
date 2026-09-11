@@ -13,7 +13,7 @@ class ConversationStoreTests(unittest.TestCase):
         return ConversationStore(Path(temp_dir.name) / "test.db")
 
     def print_success(self, message):
-        print(f"✓ {message}", flush=True)
+        print(f"[OK] {message}", flush=True)
 
     def test_two_conversations_store_system_messages_separately(self):
         store = self.create_store()

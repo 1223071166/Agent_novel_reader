@@ -3,12 +3,8 @@ __pycache__/
 frontend/node_modules/
 todo
 
-# Local book data and generated databases.
-data/book_information/chapters/
-data/book_information/info.txt
-data/book_information/novel.txt
-data/book_information/novel.txt.bak
-data/book_information/chapters.txt
-data/book_information/summaries/
+# Local book data, current selection, and generated databases.
+data/books/
+data/selected_book.txt
 data/database/vector_db/
 data/database/conversations.db

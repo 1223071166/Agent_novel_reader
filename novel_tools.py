@@ -1,15 +1,18 @@
 import os
 import re
 
-from config import CHAPTER_DIR, CHAPTER_LIST
-from summaries import get_summary
+from config import BookPaths
+from summaries import get_summary as _get_summary
 from embedding import search
 embedding_search = search
 
 chapter_cache={}
 titles={}
-def load_titles():
-    with open(CHAPTER_LIST,"r",encoding="utf-8") as f:
+
+def load_titles(book_path: BookPaths):
+    titles.clear()
+    chapter_cache.clear()
+    with open(book_path.chapter_list,"r",encoding="utf-8") as f:
         lines=f.read().splitlines()
 
     for line in lines:
@@ -18,52 +21,53 @@ def load_titles():
             titles[int(match.group(1))]=match.group(2).strip()
 
 
-def read_chapter(chapter_id):
+def read_chapter(chapter_id, book_path: BookPaths):
     """按需读取单章正文，读过的缓存起来。返回 None 表示章节不存在。"""
-    if chapter_id in chapter_cache:
-        return chapter_cache[chapter_id]
+    cache_key = (book_path.book_id, chapter_id)
+    if cache_key in chapter_cache:
+        return chapter_cache[cache_key]
 
-    path=os.path.join(CHAPTER_DIR,f"{chapter_id}.txt")
+    path=book_path.chapter_dir / f"{chapter_id}.txt"
     if not os.path.isfile(path):
         return {"error": f"不存在第 {chapter_id} 章"}
 
     with open(path,"r",encoding="utf-8") as f:
         content=f.read()
 
-    chapter=chapter_cache[chapter_id]={
+    chapter=chapter_cache[cache_key]={
         "title":titles.get(chapter_id,""),
         "content":content
     }
     return chapter
 
 #可用工具
-def get_chapter_list():
+def get_chapter_list(book_path: BookPaths):
     """获取小说章节列表"""
-    with open(CHAPTER_LIST,"r",encoding="utf-8") as f:
+    with open(book_path.chapter_list,"r",encoding="utf-8") as f:
         return f.read()
 
 
-def get_chapter(chapter_id:int):
+def get_chapter(chapter_id:int, book_path: BookPaths):
     """获取指定章节正文"""
-    chapter=read_chapter(chapter_id)
+    chapter=read_chapter(chapter_id, book_path)
     if chapter is None:
         return {"error": f"不存在第 {chapter_id} 章"}
 
     return chapter["content"]
 
 
-def iter_chapters():
+def iter_chapters(book_path: BookPaths):
     """按章节号顺序遍历全书，按需读取（利用 read_chapter 的缓存）。"""
     for chapter_id in sorted(titles):
-        chapter=read_chapter(chapter_id)
+        chapter=read_chapter(chapter_id, book_path)
         if chapter is not None:
             yield chapter_id, chapter
 
 
-def search_keyword(keyword:str):
+def search_keyword(keyword:str, book_path: BookPaths):
     """搜索关键词出现的章节"""
     result=[]
-    for chapter_id, chapter in iter_chapters():
+    for chapter_id, chapter in iter_chapters(book_path):
         text=chapter["content"]
         count=text.count(keyword)
         if count>0:
@@ -71,12 +75,12 @@ def search_keyword(keyword:str):
     return result
 
 
-def search_keyword_in_chapter(chapter_id:int, keyword:str):
+def search_keyword_in_chapter(chapter_id:int, keyword:str, book_path: BookPaths):
     """搜索指定章节关键词上下文"""
     if not keyword:
         return {"error": "关键词不能为空"}
     
-    chapter=read_chapter(chapter_id)
+    chapter=read_chapter(chapter_id, book_path)
     if chapter is None:
         return {"error": f"不存在第 {chapter_id} 章"}
 
@@ -105,18 +109,26 @@ def search_keyword_in_chapter(chapter_id:int, keyword:str):
         start=index+len(keyword)
     return f"搜索了第{chapter_id}章({titles.get(chapter_id,'')})内的关键词{keyword},共找到{len(result)}个结果，以下为上下文：\n" + "\n".join(result)
 
-def semantic_search(query:str,n:int=10):
+def semantic_search(query:str,book_path: BookPaths,n:int=10):
     """使用embedding进行小说语义检索，返回最相关文本片段"""
     global embedding_search
 
-    results=embedding_search(query,n=n)
+    results=embedding_search(query,n=n,book_path=book_path)
 
     output=[]
 
     for item in results:
-        output.append(f"第{item["metadata"]["chapter"]}章（{item["metadata"]["title"]}）：\n{item["text"][:500]}\n")
+        metadata = item["metadata"]
+        output.append(
+            f"第{metadata['chapter']}章（{metadata['title']}）：\n"
+            f"{item['text'][:500]}\n"
+        )
     return output
 
+
+def get_summary(level: str,book_path: BookPaths, start: int | None = None):
+    """兼容 ChatService 的 book_path 参数，摘要逻辑暂使用默认路径。"""
+    return _get_summary(level, start)
 
 
 TOOLS=[
@@ -245,9 +257,7 @@ AVAILABLE_TOOLS={
 }
 
 
-
-
-def get_title(chapter_id, default=""):
+def get_title(chapter_id,book_path: BookPaths, default=""):
     return titles.get(chapter_id, default)
 
 

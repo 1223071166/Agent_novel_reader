@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-
+from dataclasses import dataclass
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -11,16 +11,51 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 # Project files and directories.
 DATA_DIR = PROJECT_ROOT / "data"
-BOOK_INFORMATION_DIR = DATA_DIR / "book_information"
+BOOKS_DIR = DATA_DIR / "books"
+SELECTED_BOOK_FILE = DATA_DIR / "selected_book.txt"
 DATABASE_DIR = DATA_DIR / "database"
 
-NOVEL_FILE = BOOK_INFORMATION_DIR / "novel.txt"
-NOVEL_BACKUP_FILE = BOOK_INFORMATION_DIR / "novel.txt.bak"
-CHAPTER_DIR = BOOK_INFORMATION_DIR / "chapters"
-CHAPTER_LIST = BOOK_INFORMATION_DIR / "chapters.txt"
-INFO_FILE = BOOK_INFORMATION_DIR / "info.txt"
-SUMMARY_DIR = BOOK_INFORMATION_DIR / "summaries"
-DB_DIR = DATABASE_DIR / "vector_db"
+BOOK_ID = "升维之旅"
+
+
+@dataclass(frozen=True)
+class BookPaths:
+    book_id: str
+    @property
+    def root(self) -> Path:
+        return BOOKS_DIR / self.book_id
+    @property
+    def novel_file(self) -> Path:
+        return self.root / "novel.txt"
+    @property
+    def info_file(self) -> Path:
+        return self.root / "info.txt"
+    @property
+    def chapter_dir(self) -> Path:
+        return self.root / "chapters"
+    @property
+    def chapter_list(self) -> Path:
+        return self.root / "chapters.txt"
+    @property
+    def summary_dir(self) -> Path:
+        return self.root / "summaries"
+    @property
+    def vector_db_dir(self) -> Path:
+        return DATABASE_DIR / "vector_db" / self.book_id
+
+
+DEFAULT_BOOK_PATHS = BookPaths(BOOK_ID)
+
+# Backward-compatible aliases for modules that have not been migrated yet.
+BOOK_INFORMATION_DIR = DEFAULT_BOOK_PATHS.root
+NOVEL_FILE = DEFAULT_BOOK_PATHS.novel_file
+NOVEL_BACKUP_FILE = DEFAULT_BOOK_PATHS.root / "novel.txt.bak"
+CHAPTER_DIR = DEFAULT_BOOK_PATHS.chapter_dir
+CHAPTER_LIST = DEFAULT_BOOK_PATHS.chapter_list
+INFO_FILE = DEFAULT_BOOK_PATHS.info_file
+SUMMARY_DIR = DEFAULT_BOOK_PATHS.summary_dir
+DB_DIR = DEFAULT_BOOK_PATHS.vector_db_dir
+
 VECTOR_COLLECTION_NAME = "novel"
 MESSAGE_STORAGE_FILE = DATABASE_DIR / "conversations.db"
 # API configuration.
