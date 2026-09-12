@@ -106,9 +106,11 @@ class ChatServiceTests(unittest.TestCase):
             [event.data["content"] for event in events if event.event == "token"],
             ["你好", "，读者"],
         )
+        self.assertEqual(events[0].data["title"], "请打招呼")
 
         conversation = service._store.load_conversation("normal", BOOK_ID)
         self.assertIsNotNone(conversation)
+        self.assertEqual(conversation.title, "请打招呼")
         self.assertEqual(conversation.messages[-2].role, "user")
         self.assertEqual(conversation.messages[-2].content, "请打招呼")
         self.assertEqual(conversation.messages[-1].role, "assistant")
@@ -131,8 +133,8 @@ class ChatServiceTests(unittest.TestCase):
     def test_conversations_stay_bound_to_their_book(self):
         service = chat_module.ChatService()
         with patch.object(service, "_create_initial_messages", return_value=[]):
-            service.create_conversation("book-1", "conversation-1")
-            service.create_conversation("book-2", "conversation-2")
+            service.create_conversation("book-1", "conversation-1", "书一会话")
+            service.create_conversation("book-2", "conversation-2", "书二会话")
 
         self.assertEqual(
             [conversation.id for conversation in service.get_conversations("book-1")],
@@ -142,6 +144,34 @@ class ChatServiceTests(unittest.TestCase):
         self.assertEqual(events[0].event, "error")
         self.assertEqual(events[0].data["code"], "conversation_book_mismatch")
         self.print_success("会话创建后始终绑定原书籍")
+
+    def test_title_comes_from_the_first_user_message_and_is_not_replaced(self):
+        fake_client = FakeClient([
+            [text_chunk("第一次回答")],
+            [text_chunk("第二次回答")],
+        ])
+
+        with patch.object(chat_module, "client", fake_client):
+            service = chat_module.ChatService()
+            first_events = list(service.stream_message(
+                BOOK_ID,
+                "title",
+                "  请帮我分析\n这一段里发生了什么事情以及人物关系  ",
+            ))
+            second_events = list(service.stream_message(
+                BOOK_ID,
+                "title",
+                "这句话不应该成为新标题",
+            ))
+
+        expected = "请帮我分析 这一段里发生了什么事情以及…"
+        self.assertEqual(first_events[0].data["title"], expected)
+        self.assertEqual(second_events[0].data["title"], expected)
+        self.assertEqual(
+            service._store.load_conversation("title", BOOK_ID).title,
+            expected,
+        )
+        self.print_success("会话标题取首条用户消息并按长度截断")
 
     def test_tool_call_can_continue_to_final_answer(self):
         fake_client = FakeClient([

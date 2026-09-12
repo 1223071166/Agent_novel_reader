@@ -16,6 +16,14 @@ from services.models import ChatEvent, Conversation, Message
 
 
 MAX_TOOL_ROUNDS = 100
+MAX_CONVERSATION_TITLE_LENGTH = 20
+
+
+def conversation_title(user_content: str) -> str:
+    title = " ".join(user_content.split()) or "新对话"
+    if len(title) <= MAX_CONVERSATION_TITLE_LENGTH:
+        return title
+    return title[:MAX_CONVERSATION_TITLE_LENGTH - 1] + "…"
 
 
 class ChatService:
@@ -35,26 +43,28 @@ class ChatService:
         }
         self._conversations_lock = threading.Lock()
 
-    def create_conversation(self, book_id: str, conversation_id: str) -> None:
+    def create_conversation(self, book_id: str, conversation_id: str, title: str) -> str:
         with self._conversations_lock:
             existing = self._conversations.get(conversation_id)
             if existing is not None:
                 if existing.book_id != book_id:
                     raise ValueError("该会话属于另一本书")
-                return
+                return existing.title
 
             book_path = BookPaths(book_id)
             messages = self._create_initial_messages(book_path)
-            self._store.create_conversation(conversation_id, book_id)
+            self._store.create_conversation(conversation_id, book_id, title)
             self._conversations[conversation_id] = Conversation(
                 id=conversation_id,
                 book_id=book_id,
+                title=title,
                 messages=messages,
             )
             for message in messages:
                 self._store.save_message(conversation_id, message)
             self._locks[conversation_id] = threading.Lock()
             self._cancel_events[conversation_id] = threading.Event()
+            return title
     
     def delete_conversation(self, book_id: str, conversation_id: str) -> None:
         with self._conversations_lock:
@@ -82,7 +92,11 @@ class ChatService:
         user_content: str,
     ) -> Iterator[ChatEvent]:
         try:
-            self.create_conversation(book_id, conversation_id)
+            title = self.create_conversation(
+                book_id,
+                conversation_id,
+                conversation_title(user_content),
+            )
         except ValueError as exc:
             yield ChatEvent("error", {
                 "code": "conversation_book_mismatch",
@@ -112,6 +126,7 @@ class ChatService:
             yield ChatEvent("message_start", {
                 "conversation_id": conversation_id,
                 "message_id": message_id,
+                "title": title,
             })
 
             has_error = False

@@ -18,8 +18,8 @@ class ConversationStoreTests(unittest.TestCase):
     def test_two_conversations_store_system_messages_separately(self):
         store = self.create_store()
 
-        store.create_conversation("conversation-1", "book-1")
-        store.create_conversation("conversation-2", "book-2")
+        store.create_conversation("conversation-1", "book-1", "会话一")
+        store.create_conversation("conversation-2", "book-2", "会话二")
 
         store.save_message(
             "conversation-1",
@@ -45,6 +45,8 @@ class ConversationStoreTests(unittest.TestCase):
         self.assertIsNotNone(second)
         self.assertEqual(len(first.messages), 2)
         self.assertEqual(len(second.messages), 2)
+        self.assertEqual(first.title, "会话一")
+        self.assertEqual(second.title, "会话二")
         self.assertEqual(first.messages[0].content, "会话一的系统提示")
         self.assertEqual(second.messages[0].content, "会话二的系统提示")
         self.print_success("两个会话的 system 消息可以分别保存")
@@ -59,7 +61,7 @@ class ConversationStoreTests(unittest.TestCase):
 
     def test_delete_conversation(self):
         store = self.create_store()
-        store.create_conversation("conversation-1", "book-1")
+        store.create_conversation("conversation-1", "book-1", "待删除")
 
         store.delete_conversation("conversation-1", "book-1")
 
@@ -69,7 +71,7 @@ class ConversationStoreTests(unittest.TestCase):
 
     def test_delete_conversation_cascades_to_messages(self):
         store = self.create_store()
-        store.create_conversation("conversation-1", "book-1")
+        store.create_conversation("conversation-1", "book-1", "待删除")
         store.save_message(
             "conversation-1",
             Message(id="user-1", role="user", content="你好"),
@@ -93,18 +95,19 @@ class ConversationStoreTests(unittest.TestCase):
     def test_create_same_conversation_twice_does_not_duplicate(self):
         store = self.create_store()
 
-        store.create_conversation("conversation-1", "book-1")
-        store.create_conversation("conversation-1", "book-1")
+        store.create_conversation("conversation-1", "book-1", "最初标题")
+        store.create_conversation("conversation-1", "book-1", "不应覆盖")
 
         conversations = store.load_all_conversations()
 
         self.assertEqual(list(conversations), ["conversation-1"])
+        self.assertEqual(conversations["conversation-1"].title, "最初标题")
         self.print_success("重复创建同一个会话不会产生重复记录")
 
     def test_messages_from_different_conversations_are_isolated(self):
         store = self.create_store()
-        store.create_conversation("conversation-1", "book-1")
-        store.create_conversation("conversation-2", "book-2")
+        store.create_conversation("conversation-1", "book-1", "会话一")
+        store.create_conversation("conversation-2", "book-2", "会话二")
         store.save_message(
             "conversation-1",
             Message(id="message-1", role="user", content="只属于会话一"),
@@ -125,7 +128,7 @@ class ConversationStoreTests(unittest.TestCase):
 
     def test_conversation_can_only_be_loaded_and_deleted_from_its_book(self):
         store = self.create_store()
-        store.create_conversation("conversation-1", "book-1")
+        store.create_conversation("conversation-1", "book-1", "仅属于书一")
 
         self.assertIsNone(store.load_conversation("conversation-1", "book-2"))
         store.delete_conversation("conversation-1", "book-2")
@@ -134,7 +137,7 @@ class ConversationStoreTests(unittest.TestCase):
 
     def test_message_order_is_preserved(self):
         store = self.create_store()
-        store.create_conversation("conversation-1", "book-1")
+        store.create_conversation("conversation-1", "book-1", "消息顺序")
 
         messages = [
             Message(id="message-1", role="system", content="系统"),
@@ -156,7 +159,7 @@ class ConversationStoreTests(unittest.TestCase):
 
     def test_tool_message_fields_are_preserved(self):
         store = self.create_store()
-        store.create_conversation("conversation-1", "book-1")
+        store.create_conversation("conversation-1", "book-1", "工具消息")
         tool_calls = [
             {
                 "id": "call-1",

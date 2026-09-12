@@ -20,6 +20,7 @@ export type SavedMessage = {
 export type SavedConversation = {
   id: string;
   book_id: string;
+  title: string;
   messages: SavedMessage[];
 };
 

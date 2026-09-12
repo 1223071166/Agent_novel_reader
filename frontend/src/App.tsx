@@ -9,12 +9,13 @@ import type { TimelineItem } from "./chatTimeline";
 //npm --prefix frontend run dev
 type Conversation = {
   id: string;
+  title: string;
   messages: TimelineItem[];
-  deleted?: boolean;
 };
 
 const makeConversation = (): Conversation => ({
   id: crypto.randomUUID(),
+  title: "新对话",
   messages: [],
 });
 
@@ -54,7 +55,7 @@ const formatToolValue = (value: unknown) => {
 function App() {
   const [conversations, setConversations] = useState<Conversation[]>([makeConversation()]);
   const [bookId, setBookId] = useState<string | null>(null);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -73,10 +74,11 @@ function App() {
         setConversations(savedConversations.length > 0
           ? savedConversations.map((conversation) => ({
               id: conversation.id,
+              title: conversation.title,
               messages: timelineFromConversation(conversation),
             }))
           : [makeConversation()]);
-        setActiveIndex(0);
+        setActiveConversationId(savedConversations[0]?.id ?? null);
       })
       .catch((requestError) => {
         if (!cancelled) {
@@ -86,21 +88,22 @@ function App() {
     return () => { cancelled = true; };
   }, []);
 
-  const activeConversation = conversations[activeIndex];
+  const activeConversation = conversations.find(
+    (conversation) => conversation.id === activeConversationId,
+  ) ?? conversations[0];
 
-  const updateConversation = (index: number, update: (conversation: Conversation) => Conversation) => {
-    setConversations((previous) => previous.map((conversation, i) => (
-      i === index ? update(conversation) : conversation
+  const updateConversation = (conversationId: string, update: (conversation: Conversation) => Conversation) => {
+    setConversations((previous) => previous.map((conversation) => (
+      conversation.id === conversationId ? update(conversation) : conversation
     )));
   };
 
   const sendMessage = async () => {
     const text = input.trim();
-    if (!text || loading || !bookId || !activeConversation || activeConversation.deleted) return;
+    if (!text || loading || !bookId || !activeConversation) return;
 
-    const conversationIndex = activeIndex;
     const conversationId = activeConversation.id;
-    updateConversation(conversationIndex, (conversation) => ({
+    updateConversation(conversationId, (conversation) => ({
         ...conversation,
         messages: appendUserItem(conversation.messages, text),
     }));
@@ -112,8 +115,11 @@ function App() {
         if (event === "error") {
           throw new Error(String(data.message ?? "聊天请求失败"));
         }
-        updateConversation(conversationIndex, (conversation) => ({
+        updateConversation(conversationId, (conversation) => ({
           ...conversation,
+          title: event === "message_start" && typeof data.title === "string"
+            ? data.title
+            : conversation.title,
           messages: applyChatEvent(conversation.messages, { event, data }),
         }));
       });
@@ -126,24 +132,33 @@ function App() {
   };
 
   const createConversation = () => {
-    setConversations((previous) => [...previous, makeConversation()]);
-    setActiveIndex(conversations.length);
+    const conversation = makeConversation();
+    setConversations((previous) => [...previous, conversation]);
+    setActiveConversationId(conversation.id);
     setInput("");
     setError("");
   };
 
-  const deleteConversation = async (index: number) => {
-    const conversation = conversations[index];
+  const deleteConversation = async (conversationId: string) => {
+    const conversation = conversations.find((item) => item.id === conversationId);
     if (!bookId || !conversation) return;
 
     try {
       await deleteConversationApi(bookId, conversation.id);
-      updateConversation(index, (currentConversation) => ({ ...currentConversation, deleted: true }));
-      if (index === activeIndex) {
-        const nextIndex = conversations.findIndex(
-          (item, itemIndex) => itemIndex !== index && !item.deleted,
-        );
-        setActiveIndex(nextIndex);
+      const deletedIndex = conversations.findIndex((item) => item.id === conversationId);
+      const remaining = conversations.filter((item) => item.id !== conversationId);
+      if (remaining.length === 0) {
+        const replacement = makeConversation();
+        setConversations([replacement]);
+        setActiveConversationId(replacement.id);
+      } else {
+        setConversations((previous) => previous.filter((item) => item.id !== conversationId));
+        if (activeConversation?.id === conversationId) {
+          const nextIndex = Math.min(deletedIndex, remaining.length - 1);
+          setActiveConversationId(remaining[nextIndex].id);
+        }
+      }
+      if (activeConversation?.id === conversationId) {
         setError("");
       }
     } catch (requestError) {
@@ -169,29 +184,27 @@ function App() {
 
         <div className="conversation-list">
           <div className="sidebar-section-label">最近对话</div>
-          {conversations.map((conversation, index) => (
-            !conversation.deleted && (
+          {conversations.map((conversation) => (
               <div
                 key={conversation.id}
-                className={`conversation ${index === activeIndex ? "active" : ""}`}
-                onClick={() => setActiveIndex(index)}
+                className={`conversation ${conversation.id === activeConversation?.id ? "active" : ""}`}
+                onClick={() => setActiveConversationId(conversation.id)}
               >
                 <span className="conversation-icon">✧</span>
-                <span className="conversation-name">对话 {index + 1}</span>
+                <span className="conversation-name">{conversation.title}</span>
                 <button
                   className="delete-chat"
-                  disabled={loading && index === activeIndex}
-                  aria-label={`删除对话 ${index + 1}`}
+                  disabled={loading && conversation.id === activeConversation?.id}
+                  aria-label={`删除对话：${conversation.title}`}
                   title="删除对话"
                   onClick={(event) => {
                     event.stopPropagation();
-                    void deleteConversation(index);
+                    void deleteConversation(conversation.id);
                   }}
                 >
                   ×
                 </button>
               </div>
-            )
           ))}
         </div>
 
@@ -203,9 +216,7 @@ function App() {
 
       <main className="main">
         <section className="chat">
-          {!activeConversation || activeConversation.deleted ? (
-            <div className="empty-state"><h1>这个对话已删除</h1></div>
-          ) : activeConversation.messages.length === 0 ? (
+          {!activeConversation || activeConversation.messages.length === 0 ? (
             <div className="empty-state">
               <div className="empty-logo"><span>✦</span></div>
               <div className="empty-eyebrow">AgentReader</div>
@@ -267,7 +278,7 @@ function App() {
                 }
               }}
             />
-            <button className="send-button" type="submit" disabled={(!input.trim()&&!loading) || !activeConversation || !!activeConversation.deleted}>
+            <button className="send-button" type="submit" disabled={(!input.trim()&&!loading) || !activeConversation}>
               {loading ? "■" : "↑"}
             </button>
           </form>

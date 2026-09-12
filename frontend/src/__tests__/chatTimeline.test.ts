@@ -10,6 +10,7 @@ describe("chat timeline", () => {
     const conversation: SavedConversation = {
       id: "conversation-1",
       book_id: "book-1",
+      title: "请读取第一章",
       messages: [
         {
           id: "user-1",

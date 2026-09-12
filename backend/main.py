@@ -79,6 +79,7 @@ def _conversation_payload(conversation: Conversation) -> dict:
     return {
         "id": conversation.id,
         "book_id": conversation.book_id,
+        "title": conversation.title,
         "messages": messages,
     }
 

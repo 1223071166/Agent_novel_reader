@@ -26,4 +26,5 @@ class Message:
 class Conversation:
     id: str
     book_id: str
+    title: str
     messages: list[Message] = field(default_factory=list)

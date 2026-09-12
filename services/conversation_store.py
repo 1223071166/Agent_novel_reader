@@ -38,7 +38,8 @@ class ConversationStore:
                 """
                 CREATE TABLE IF NOT EXISTS conversations (
                     id TEXT PRIMARY KEY,
-                    book_id TEXT NOT NULL
+                    book_id TEXT NOT NULL,
+                    title TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS messages (
@@ -60,11 +61,11 @@ class ConversationStore:
                 """
             )
 
-    def create_conversation(self, conversation_id: str, book_id: str) -> None:
+    def create_conversation(self, conversation_id: str, book_id: str, title: str) -> None:
         with self._connect() as connection:
             connection.execute(
-                "INSERT OR IGNORE INTO conversations (id, book_id) VALUES (?, ?)",
-                (conversation_id, book_id),
+                "INSERT OR IGNORE INTO conversations (id, book_id, title) VALUES (?, ?, ?)",
+                (conversation_id, book_id, title),
             )
 
     def save_message(self, conversation_id: str, message: Message) -> None:
@@ -96,7 +97,7 @@ class ConversationStore:
     def load_conversation(self, conversation_id: str, book_id: str) -> Conversation | None:
         with self._connect() as connection:
             conversation_row = connection.execute(
-                "SELECT id, book_id FROM conversations WHERE id = ? AND book_id = ?",
+                "SELECT id, book_id, title FROM conversations WHERE id = ? AND book_id = ?",
                 (conversation_id, book_id),
             ).fetchone()
 
@@ -116,13 +117,14 @@ class ConversationStore:
         return Conversation(
             id=conversation_row["id"],
             book_id=conversation_row["book_id"],
+            title=conversation_row["title"],
             messages=[self._message_from_row(row) for row in rows],
         )
 
     def load_all_conversations(self) -> dict[str, Conversation]:
         with self._connect() as connection:
             conversation_rows = connection.execute(
-                "SELECT id, book_id FROM conversations ORDER BY rowid"
+                "SELECT id, book_id, title FROM conversations ORDER BY rowid"
             ).fetchall()
 
             message_rows = connection.execute(
@@ -134,7 +136,11 @@ class ConversationStore:
             ).fetchall()
 
         conversations = {
-            row["id"]: Conversation(id=row["id"], book_id=row["book_id"])
+            row["id"]: Conversation(
+                id=row["id"],
+                book_id=row["book_id"],
+                title=row["title"],
+            )
             for row in conversation_rows
         }
 
