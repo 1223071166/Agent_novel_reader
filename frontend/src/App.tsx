@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { deleteConversation as deleteConversationApi, loadConversations, streamChat,cancelStream } from "./api";
+import { cancelStream, deleteConversation as deleteConversationApi, loadBookSelection, loadConversations, streamChat } from "./api";
 import {
   applyChatEvent,
   appendUserItem,
@@ -53,6 +53,7 @@ const formatToolValue = (value: unknown) => {
 
 function App() {
   const [conversations, setConversations] = useState<Conversation[]>([makeConversation()]);
+  const [bookId, setBookId] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -60,9 +61,15 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadConversations()
-      .then((savedConversations) => {
+    void loadBookSelection()
+      .then(async (selection) => {
+        if (!selection.selected_book_id) throw new Error("没有可用的书籍");
+        const savedConversations = await loadConversations(selection.selected_book_id);
+        return { bookId: selection.selected_book_id, savedConversations };
+      })
+      .then(({ bookId: selectedBookId, savedConversations }) => {
         if (cancelled) return;
+        setBookId(selectedBookId);
         setConversations(savedConversations.length > 0
           ? savedConversations.map((conversation) => ({
               id: conversation.id,
@@ -89,7 +96,7 @@ function App() {
 
   const sendMessage = async () => {
     const text = input.trim();
-    if (!text || loading || !activeConversation || activeConversation.deleted) return;
+    if (!text || loading || !bookId || !activeConversation || activeConversation.deleted) return;
 
     const conversationIndex = activeIndex;
     const conversationId = activeConversation.id;
@@ -101,7 +108,7 @@ function App() {
     setLoading(true);
     setError("");
     try {
-      await streamChat(conversationId, text, ({ event, data }) => {
+      await streamChat(bookId, conversationId, text, ({ event, data }) => {
         if (event === "error") {
           throw new Error(String(data.message ?? "聊天请求失败"));
         }
@@ -127,10 +134,10 @@ function App() {
 
   const deleteConversation = async (index: number) => {
     const conversation = conversations[index];
-    if (!conversation) return;
+    if (!bookId || !conversation) return;
 
     try {
-      await deleteConversationApi(conversation.id);
+      await deleteConversationApi(bookId, conversation.id);
       updateConversation(index, (currentConversation) => ({ ...currentConversation, deleted: true }));
       if (index === activeIndex) {
         const nextIndex = conversations.findIndex(
@@ -238,7 +245,11 @@ function App() {
           <form className="input-box" onSubmit={(event) => {
              event.preventDefault();
              if(loading){
-                cancelStream(activeConversation.id);
+                if (bookId && activeConversation) {
+                  void cancelStream(bookId, activeConversation.id).catch((requestError) => {
+                    setError(requestError instanceof Error ? requestError.message : "取消请求失败");
+                  });
+                }
              }
                 
              else

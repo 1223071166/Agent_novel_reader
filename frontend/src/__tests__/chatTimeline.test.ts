@@ -9,6 +9,7 @@ describe("chat timeline", () => {
   it("can restore saved user, tool, and assistant messages", () => {
     const conversation: SavedConversation = {
       id: "conversation-1",
+      book_id: "book-1",
       messages: [
         {
           id: "user-1",

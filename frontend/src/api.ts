@@ -19,25 +19,40 @@ export type SavedMessage = {
 
 export type SavedConversation = {
   id: string;
+  book_id: string;
   messages: SavedMessage[];
 };
 
-export async function loadConversations(): Promise<SavedConversation[]> {
-  const response = await fetch(`${API_BASE_URL}/api/conversations`);
+export type BookSelection = {
+  books: string[];
+  selected_book_id: string | null;
+};
+
+export async function loadBookSelection(): Promise<BookSelection> {
+  const response = await fetch(`${API_BASE_URL}/api/books`);
+  if (!response.ok) throw new Error(`加载书籍失败（${response.status}）`);
+  return await response.json() as BookSelection;
+}
+
+export async function loadConversations(bookId: string): Promise<SavedConversation[]> {
+  const query = new URLSearchParams({ book_id: bookId });
+  const response = await fetch(`${API_BASE_URL}/api/conversations?${query}`);
   if (!response.ok) throw new Error(`加载历史会话失败（${response.status}）`);
   const body = await response.json() as { conversations?: SavedConversation[] };
   return body.conversations ?? [];
 }
 
-export async function deleteConversation(conversationId: string): Promise<void> {
+export async function deleteConversation(bookId: string, conversationId: string): Promise<void> {
+  const query = new URLSearchParams({ book_id: bookId });
   const response = await fetch(
-    `${API_BASE_URL}/api/conversations/${encodeURIComponent(conversationId)}`,
+    `${API_BASE_URL}/api/conversations/${encodeURIComponent(conversationId)}?${query}`,
     { method: "DELETE" },
   );
   if (!response.ok) throw new Error(`删除会话失败（${response.status}）`);
 }
 
 export async function streamChat(
+  bookId: string,
   conversationId: string,
   message: string,
   onEvent: (event: ChatEvent) => void
@@ -45,7 +60,7 @@ export async function streamChat(
   const response = await fetch(`${API_BASE_URL}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversation_id: conversationId, message })
+    body: JSON.stringify({ book_id: bookId, conversation_id: conversationId, message })
   });
 
   if (!response.ok) {
@@ -83,11 +98,12 @@ export async function streamChat(
   }
 }
 
-export function cancelStream(conversationId:string){
-  fetch(`${API_BASE_URL}/api/cancel`, {
+export async function cancelStream(bookId: string, conversationId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/cancel`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversation_id: conversationId}),
+    body: JSON.stringify({ book_id: bookId, conversation_id: conversationId }),
   });
+  if (!response.ok) throw new Error(`取消请求失败（${response.status}）`);
 }
   

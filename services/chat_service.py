@@ -7,7 +7,7 @@ import uuid
 import copy
 from typing import Any, Iterator
 
-from config import MODEL, SHOW_USAGE, USE_SUMMARY_TOOL,MESSAGE_STORAGE_FILE,client,BOOK_ID,BookPaths
+from config import MODEL, SHOW_USAGE, USE_SUMMARY_TOOL, MESSAGE_STORAGE_FILE, client, BookPaths
 from novel_tools import AVAILABLE_TOOLS, build_tools, load_titles
 from prompts import get_system_prompt
 from usage_stats import get_field, read_usage
@@ -19,10 +19,8 @@ MAX_TOOL_ROUNDS = 100
 
 
 class ChatService:
-    def __init__(self,book_id=BOOK_ID) -> None:
-        self._book_path=BookPaths(book_id)
-
-        self._store = ConversationStore(MESSAGE_STORAGE_FILE) #数据库未来也要改成每个小说存一份
+    def __init__(self) -> None:
+        self._store = ConversationStore(MESSAGE_STORAGE_FILE)
         self._tools = build_tools(USE_SUMMARY_TOOL)
         self._available_tools = AVAILABLE_TOOLS
 
@@ -37,48 +35,63 @@ class ChatService:
         }
         self._conversations_lock = threading.Lock()
 
-        with open(self._book_path.info_file, "r", encoding="utf-8") as file:
-            info_text = file.read()
-
-        self._initial_messages = [
-            Message(id="not created", role="system", content=get_system_prompt(USE_SUMMARY_TOOL)),
-            Message(id="not created", role="system", content="这是小说的基本信息：" + info_text),
-        ]
-        load_titles(self._book_path)
-
-    def create_conversation(self, conversation_id: str) -> None:
+    def create_conversation(self, book_id: str, conversation_id: str) -> None:
         with self._conversations_lock:
-            if conversation_id not in self._conversations:
-                self._store.create_conversation(conversation_id)
-                messages = self._create_initial_messages()
-                self._conversations[conversation_id] = Conversation(
-                    id=conversation_id,
-                    messages=messages,
-                )
-                for message in messages:
-                    self._store.save_message(conversation_id, message)
-                self._locks[conversation_id] = threading.Lock()
-                self._cancel_events[conversation_id] = threading.Event()
+            existing = self._conversations.get(conversation_id)
+            if existing is not None:
+                if existing.book_id != book_id:
+                    raise ValueError("该会话属于另一本书")
+                return
+
+            book_path = BookPaths(book_id)
+            messages = self._create_initial_messages(book_path)
+            self._store.create_conversation(conversation_id, book_id)
+            self._conversations[conversation_id] = Conversation(
+                id=conversation_id,
+                book_id=book_id,
+                messages=messages,
+            )
+            for message in messages:
+                self._store.save_message(conversation_id, message)
+            self._locks[conversation_id] = threading.Lock()
+            self._cancel_events[conversation_id] = threading.Event()
     
-    def delete_conversation(self, conversation_id: str) -> None:
+    def delete_conversation(self, book_id: str, conversation_id: str) -> None:
         with self._conversations_lock:
-            self._store.delete_conversation(conversation_id)
+            conversation = self._conversations.get(conversation_id)
+            if conversation is not None and conversation.book_id != book_id:
+                raise ValueError("该会话属于另一本书")
+            self._store.delete_conversation(conversation_id, book_id)
             self._conversations.pop(conversation_id, None)
             self._locks.pop(conversation_id, None)
             self._cancel_events.pop(conversation_id, None)
 
-    def cancel_conversation(self, conversation_id: str) -> None:
+    def cancel_conversation(self, book_id: str, conversation_id: str) -> None:
         with self._conversations_lock:
+            conversation = self._conversations.get(conversation_id)
+            if conversation is not None and conversation.book_id != book_id:
+                raise ValueError("该会话属于另一本书")
             cancel_event = self._cancel_events.get(conversation_id)
             if cancel_event is not None:
                 cancel_event.set()
 
     def stream_message(
         self,
+        book_id: str,
         conversation_id: str,
         user_content: str,
     ) -> Iterator[ChatEvent]:
-        self.create_conversation(conversation_id)
+        try:
+            self.create_conversation(book_id, conversation_id)
+        except ValueError as exc:
+            yield ChatEvent("error", {
+                "code": "conversation_book_mismatch",
+                "message": str(exc),
+            })
+            return
+
+        book_path = BookPaths(book_id)
+        load_titles(book_path)
         lock = self._locks[conversation_id]
         
         if not lock.acquire(blocking=False):
@@ -102,7 +115,7 @@ class ChatService:
             })
 
             has_error = False
-            for event in self._run_model(conversation_id, cancel_event):
+            for event in self._run_model(book_path, conversation_id, cancel_event):
                 yield event
                 has_error = has_error or event.event == "error"
 
@@ -116,7 +129,7 @@ class ChatService:
             lock.release()
             #print("锁已经释放（finally）:", conversation_id)
 
-    def _run_model(self, conversation_id: str,cancel_event:threading.Event) -> Iterator[ChatEvent]:
+    def _run_model(self, book_path: BookPaths, conversation_id: str,cancel_event:threading.Event) -> Iterator[ChatEvent]:
         for round_index in range(1, MAX_TOOL_ROUNDS + 1):
             if cancel_event.is_set():
                 yield ChatEvent("error", {
@@ -214,7 +227,7 @@ class ChatService:
                 return
 
             for tool_call in tool_calls:
-                yield from self._execute_tool(conversation_id, tool_call, round_index)
+                yield from self._execute_tool(book_path, conversation_id, tool_call, round_index)
 
         yield ChatEvent("error", {
             "code": "tool_round_limit",
@@ -223,6 +236,7 @@ class ChatService:
 
     def _execute_tool(
         self,
+        book_path: BookPaths,
         conversation_id: str,
         tool_call: dict[str, Any],
         round_index: int,
@@ -259,7 +273,7 @@ class ChatService:
         })
         try:
             result = self._available_tools[name](
-                book_path=self._book_path,
+                book_path=book_path,
                 **arguments,
             )
             is_error = False
@@ -309,13 +323,27 @@ class ChatService:
             request_message["tool_call_id"] = message.tool_call_id
         return request_message
 
-    def _create_initial_messages(self) -> list[Message]:
-        messages = copy.deepcopy(self._initial_messages)
-        for message in messages:
-            message.id = str(uuid.uuid4())
-        return messages
+    def _create_initial_messages(self, book_path: BookPaths) -> list[Message]:
+        with open(book_path.info_file, "r", encoding="utf-8") as file:
+            info_text = file.read()
+        return [
+            Message(
+                id=str(uuid.uuid4()),
+                role="system",
+                content=get_system_prompt(USE_SUMMARY_TOOL),
+            ),
+            Message(
+                id=str(uuid.uuid4()),
+                role="system",
+                content="这是小说的基本信息：" + info_text,
+            ),
+        ]
 
-    def get_conversations(self) -> list[Conversation]:
+    def get_conversations(self, book_id: str) -> list[Conversation]:
         """Return a snapshot of all persisted conversations for the API layer."""
         with self._conversations_lock:
-            return copy.deepcopy(list(self._conversations.values()))
+            return copy.deepcopy([
+                conversation
+                for conversation in self._conversations.values()
+                if conversation.book_id == book_id
+            ])

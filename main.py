@@ -1,9 +1,11 @@
 from services.chat_service import ChatService
 from cli_debug import display, execute_summary_command, execute_user_tool, show_help
+from config import BOOK_ID, BookPaths
 
 
 def chat():
     service = ChatService()
+    book_path = BookPaths(BOOK_ID)
     conversation_id = "cli"
     while True:
         try:
@@ -21,12 +23,12 @@ def chat():
             execute_user_tool(user_input,service._available_tools)
             continue
         if user_input.startswith("/summary"):
-            execute_summary_command(user_input)
+            execute_summary_command(user_input, book_path)
             continue
 
         print("[AI searching...]")
         printed_header = False
-        for event in service.stream_message(conversation_id, user_input):
+        for event in service.stream_message(BOOK_ID, conversation_id, user_input):
             if event.event == "token":
                 if not printed_header:
                     print("[assistant]:")

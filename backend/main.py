@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from services.chat_service import ChatService
 from services.models import ChatEvent, Conversation
+from config import BOOKS_DIR, SELECTED_BOOK_FILE
 #部署方法： uvicorn backend.main:app --reload
 app = FastAPI()
 chat_service = ChatService()
@@ -31,10 +32,27 @@ def health():
 
 
 class ChatRequest(BaseModel):
+    book_id: str
     conversation_id: str
     message: str
 class CancelRequest(BaseModel):
+    book_id: str
     conversation_id: str
+
+
+def _available_book_ids() -> list[str]:
+    if not BOOKS_DIR.exists():
+        return []
+    return sorted(path.name for path in BOOKS_DIR.iterdir() if path.is_dir())
+
+
+def _require_book_id(value: str) -> str:
+    book_id = value.strip()
+    if not book_id:
+        raise HTTPException(status_code=422, detail="book_id 不能为空")
+    if book_id not in _available_book_ids():
+        raise HTTPException(status_code=404, detail=f"找不到书籍：{book_id}")
+    return book_id
 
 def _sse_stream(events: Iterator[ChatEvent]) -> Iterator[str]:
     for event in events:
@@ -58,35 +76,58 @@ def _conversation_payload(conversation: Conversation) -> dict:
             "tool_calls": message.tool_calls,
             "tool_call_id": message.tool_call_id,
         })
-    return {"id": conversation.id, "messages": messages}
+    return {
+        "id": conversation.id,
+        "book_id": conversation.book_id,
+        "messages": messages,
+    }
+
+
+@app.get("/api/books")
+def get_books():
+    book_ids = _available_book_ids()
+    selected_book_id = (
+        SELECTED_BOOK_FILE.read_text(encoding="utf-8").strip()
+        if SELECTED_BOOK_FILE.exists()
+        else ""
+    )
+    if selected_book_id not in book_ids:
+        selected_book_id = book_ids[0] if book_ids else None
+    return {"books": book_ids, "selected_book_id": selected_book_id}
 
 
 @app.get("/api/conversations")
-def get_conversations():
+def get_conversations(book_id: str):
+    book_id = _require_book_id(book_id)
     return {"conversations": [
         _conversation_payload(conversation)
-        for conversation in chat_service.get_conversations()
+        for conversation in chat_service.get_conversations(book_id)
     ]}
 
 
 @app.delete("/api/conversations/{conversation_id}")
-def delete_conversation(conversation_id: str):
+def delete_conversation(conversation_id: str, book_id: str):
+    book_id = _require_book_id(book_id)
     conversation_id = conversation_id.strip()
     if not conversation_id:
         raise HTTPException(status_code=422, detail="conversation_id 不能为空")
-    chat_service.delete_conversation(conversation_id)
+    try:
+        chat_service.delete_conversation(book_id, conversation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"ok": True}
 
 
 @app.post("/api/chat")
 def chat(request: ChatRequest):
+    book_id = _require_book_id(request.book_id)
     conversation_id = request.conversation_id.strip()
     message = request.message.strip()
     if not conversation_id or not message:
         raise HTTPException(status_code=422, detail="conversation_id 和 message 不能为空")
 
     return StreamingResponse(
-        _sse_stream(chat_service.stream_message(conversation_id, message)),
+        _sse_stream(chat_service.stream_message(book_id, conversation_id, message)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -97,5 +138,10 @@ def chat(request: ChatRequest):
 
 @app.post("/api/cancel")
 def cancel_chat(request: CancelRequest):
+    book_id = _require_book_id(request.book_id)
     conversation_id = request.conversation_id.strip()
-    chat_service.cancel_conversation(conversation_id)
+    try:
+        chat_service.cancel_conversation(book_id, conversation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True}

@@ -18,8 +18,8 @@ class ConversationStoreTests(unittest.TestCase):
     def test_two_conversations_store_system_messages_separately(self):
         store = self.create_store()
 
-        store.create_conversation("conversation-1")
-        store.create_conversation("conversation-2")
+        store.create_conversation("conversation-1", "book-1")
+        store.create_conversation("conversation-2", "book-2")
 
         store.save_message(
             "conversation-1",
@@ -38,8 +38,8 @@ class ConversationStoreTests(unittest.TestCase):
             Message(id="system-4", role="system", content="会话二的小说信息"),
         )
 
-        first = store.load_conversation("conversation-1")
-        second = store.load_conversation("conversation-2")
+        first = store.load_conversation("conversation-1", "book-1")
+        second = store.load_conversation("conversation-2", "book-2")
 
         self.assertIsNotNone(first)
         self.assertIsNotNone(second)
@@ -52,24 +52,24 @@ class ConversationStoreTests(unittest.TestCase):
     def test_delete_missing_conversation_is_safe(self):
         store = self.create_store()
 
-        store.delete_conversation("not-exist")
+        store.delete_conversation("not-exist", "book-1")
 
-        self.assertIsNone(store.load_conversation("not-exist"))
+        self.assertIsNone(store.load_conversation("not-exist", "book-1"))
         self.print_success("删除不存在的会话不会报错")
 
     def test_delete_conversation(self):
         store = self.create_store()
-        store.create_conversation("conversation-1")
+        store.create_conversation("conversation-1", "book-1")
 
-        store.delete_conversation("conversation-1")
+        store.delete_conversation("conversation-1", "book-1")
 
-        self.assertIsNone(store.load_conversation("conversation-1"))
+        self.assertIsNone(store.load_conversation("conversation-1", "book-1"))
         self.assertNotIn("conversation-1", store.load_all_conversations())
         self.print_success("删除会话功能正常")
 
     def test_delete_conversation_cascades_to_messages(self):
         store = self.create_store()
-        store.create_conversation("conversation-1")
+        store.create_conversation("conversation-1", "book-1")
         store.save_message(
             "conversation-1",
             Message(id="user-1", role="user", content="你好"),
@@ -79,7 +79,7 @@ class ConversationStoreTests(unittest.TestCase):
             Message(id="assistant-1", role="assistant", content="你好，读者"),
         )
 
-        store.delete_conversation("conversation-1")
+        store.delete_conversation("conversation-1", "book-1")
 
         with store._connect() as connection:
             message_count = connection.execute(
@@ -93,8 +93,8 @@ class ConversationStoreTests(unittest.TestCase):
     def test_create_same_conversation_twice_does_not_duplicate(self):
         store = self.create_store()
 
-        store.create_conversation("conversation-1")
-        store.create_conversation("conversation-1")
+        store.create_conversation("conversation-1", "book-1")
+        store.create_conversation("conversation-1", "book-1")
 
         conversations = store.load_all_conversations()
 
@@ -103,8 +103,8 @@ class ConversationStoreTests(unittest.TestCase):
 
     def test_messages_from_different_conversations_are_isolated(self):
         store = self.create_store()
-        store.create_conversation("conversation-1")
-        store.create_conversation("conversation-2")
+        store.create_conversation("conversation-1", "book-1")
+        store.create_conversation("conversation-2", "book-2")
         store.save_message(
             "conversation-1",
             Message(id="message-1", role="user", content="只属于会话一"),
@@ -114,8 +114,8 @@ class ConversationStoreTests(unittest.TestCase):
             Message(id="message-2", role="user", content="只属于会话二"),
         )
 
-        first = store.load_conversation("conversation-1")
-        second = store.load_conversation("conversation-2")
+        first = store.load_conversation("conversation-1", "book-1")
+        second = store.load_conversation("conversation-2", "book-2")
 
         self.assertIsNotNone(first)
         self.assertIsNotNone(second)
@@ -123,9 +123,18 @@ class ConversationStoreTests(unittest.TestCase):
         self.assertEqual([message.content for message in second.messages], ["只属于会话二"])
         self.print_success("不同会话的消息互不影响")
 
+    def test_conversation_can_only_be_loaded_and_deleted_from_its_book(self):
+        store = self.create_store()
+        store.create_conversation("conversation-1", "book-1")
+
+        self.assertIsNone(store.load_conversation("conversation-1", "book-2"))
+        store.delete_conversation("conversation-1", "book-2")
+        self.assertIsNotNone(store.load_conversation("conversation-1", "book-1"))
+        self.print_success("会话只能通过所属书籍读取和删除")
+
     def test_message_order_is_preserved(self):
         store = self.create_store()
-        store.create_conversation("conversation-1")
+        store.create_conversation("conversation-1", "book-1")
 
         messages = [
             Message(id="message-1", role="system", content="系统"),
@@ -136,7 +145,7 @@ class ConversationStoreTests(unittest.TestCase):
         for message in messages:
             store.save_message("conversation-1", message)
 
-        conversation = store.load_conversation("conversation-1")
+        conversation = store.load_conversation("conversation-1", "book-1")
 
         self.assertIsNotNone(conversation)
         self.assertEqual(
@@ -147,7 +156,7 @@ class ConversationStoreTests(unittest.TestCase):
 
     def test_tool_message_fields_are_preserved(self):
         store = self.create_store()
-        store.create_conversation("conversation-1")
+        store.create_conversation("conversation-1", "book-1")
         tool_calls = [
             {
                 "id": "call-1",
@@ -177,7 +186,7 @@ class ConversationStoreTests(unittest.TestCase):
             ),
         )
 
-        conversation = store.load_conversation("conversation-1")
+        conversation = store.load_conversation("conversation-1", "book-1")
 
         self.assertIsNotNone(conversation)
         assistant = conversation.messages[0]

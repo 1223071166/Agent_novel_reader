@@ -78,7 +78,7 @@ def execute_user_tool(command, available_tools):
         print(f"\n[tool error] {e}")
 
 
-def execute_summary_command(command):
+def execute_summary_command(command, book_path: BookPaths):
     """人类专属的总结生成指令：/summary "mid" 21 / /summary "big" 1 / /summary "whole"。AI 无权调用。"""
     try:
         match=re.match(r'/summary\s+"?(\w+)"?(?:\s+(\d+))?\s*$',command.strip())
@@ -89,7 +89,7 @@ def execute_summary_command(command):
         start=int(match.group(2)) if match.group(2) is not None else None
 
         print(f"\n[summary:{level}] 生成中，可能耗时较长，请稍候...")
-        result=generate_summary(level,start)
+        result=generate_summary(level,book_path,start)
         print(result)
 
     except Exception as e:
