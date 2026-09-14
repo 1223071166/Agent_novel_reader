@@ -17,7 +17,7 @@ export type SavedMessage = {
   tool_call_id: string | null;
 };
 
-export type SavedConversation = {
+export type ConversationResponse = {
   id: string;
   book_id: string;
   title: string;
@@ -26,8 +26,31 @@ export type SavedConversation = {
 
 export type BookSelection = {
   books: string[];
+  importing_book_ids: string[];
   selected_book_id: string | null;
 };
+
+export type BookImportStatus = {
+  book_id: string;
+  original_name?: string;
+  chapter_count?: number;
+  status: "splitting" | "awaiting_info" | "ready_for_embedding" | "pending" | "loading_model" | "encoding" | "writing" | "completed" | "failed";
+  processed: number;
+  total: number;
+  message: string;
+  error: string | null;
+  info?: string;
+};
+
+async function responseError(response: Response, fallback: string): Promise<Error> {
+  try {
+    const body = await response.json() as { detail?: unknown };
+    if (typeof body.detail === "string") return new Error(body.detail);
+  } catch {
+    // Use the fallback when the response is not JSON.
+  }
+  return new Error(`${fallback}（${response.status}）`);
+}
 
 export async function loadBookSelection(): Promise<BookSelection> {
   const response = await fetch(`${API_BASE_URL}/api/books`);
@@ -35,11 +58,70 @@ export async function loadBookSelection(): Promise<BookSelection> {
   return await response.json() as BookSelection;
 }
 
-export async function loadConversations(bookId: string): Promise<SavedConversation[]> {
+export async function importBook(file: File): Promise<BookImportStatus> {
+  const response = await fetch(`${API_BASE_URL}/api/book-imports`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-File-Name": encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  if (!response.ok) throw await responseError(response, "导入小说失败");
+  return await response.json() as BookImportStatus;
+}
+
+export async function saveBookInfo(bookId: string, content: string): Promise<BookImportStatus> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/book-imports/${encodeURIComponent(bookId)}/info`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    },
+  );
+  if (!response.ok) throw await responseError(response, "保存书籍信息失败");
+  return await response.json() as BookImportStatus;
+}
+
+export async function startBookEmbedding(bookId: string): Promise<BookImportStatus> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/book-imports/${encodeURIComponent(bookId)}/embedding`,
+    { method: "POST" },
+  );
+  if (!response.ok) throw await responseError(response, "启动向量化失败");
+  return await response.json() as BookImportStatus;
+}
+
+export async function loadBookEmbeddingStatus(bookId: string): Promise<BookImportStatus> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/book-imports/${encodeURIComponent(bookId)}/embedding`,
+  );
+  if (!response.ok) throw await responseError(response, "读取向量化进度失败");
+  return await response.json() as BookImportStatus;
+}
+
+export async function loadBookImport(bookId: string): Promise<BookImportStatus> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/book-imports/${encodeURIComponent(bookId)}`,
+  );
+  if (!response.ok) throw await responseError(response, "读取导入进度失败");
+  return await response.json() as BookImportStatus;
+}
+
+export async function discardBookImport(bookId: string): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/book-imports/${encodeURIComponent(bookId)}`,
+    { method: "DELETE" },
+  );
+  if (!response.ok) throw await responseError(response, "放弃导入失败");
+}
+
+export async function loadConversations(bookId: string): Promise<ConversationResponse[]> {
   const query = new URLSearchParams({ book_id: bookId });
   const response = await fetch(`${API_BASE_URL}/api/conversations?${query}`);
   if (!response.ok) throw new Error(`加载历史会话失败（${response.status}）`);
-  const body = await response.json() as { conversations?: SavedConversation[] };
+  const body = await response.json() as { conversations?: ConversationResponse[] };
   return body.conversations ?? [];
 }
 

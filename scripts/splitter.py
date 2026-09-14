@@ -1,7 +1,7 @@
-import os
 import re
+import shutil
 
-from config import CHAPTER_DIR, CHAPTER_LIST, NOVEL_FILE
+from config import BOOK_ID, BookPaths
 
 
 def find_chapters(text):
@@ -34,20 +34,16 @@ def find_chapters(text):
     return chapters
 
 
-def save_chapters(chapters):
-    if os.path.exists(CHAPTER_DIR):
-        for f in os.listdir(CHAPTER_DIR):
-            path=os.path.join(CHAPTER_DIR,f)
-            if os.path.isfile(path):
-                os.remove(path)
-    else:
-        os.makedirs(CHAPTER_DIR)
+def save_chapters(chapters, book_path: BookPaths):
+    if book_path.chapter_dir.exists():
+        shutil.rmtree(book_path.chapter_dir)
+    book_path.chapter_dir.mkdir(parents=True)
 
     chapter_list=[]
 
     for index,chapter in enumerate(chapters):
         filename=f"{index+1}.txt"
-        path=os.path.join(CHAPTER_DIR,filename)
+        path=book_path.chapter_dir / filename
 
         with open(path,"w",encoding="utf-8") as f:
             f.write(chapter["content"])
@@ -56,23 +52,26 @@ def save_chapters(chapters):
             f"{index+1}，{chapter['title']}"
         )
 
-    with open(CHAPTER_LIST,"w",encoding="utf-8") as f:
+    with open(book_path.chapter_list,"w",encoding="utf-8") as f:
         f.write("\n".join(chapter_list))
+
+
+def split_book(book_path: BookPaths) -> int:
+    text = book_path.novel_file.read_text(encoding="utf-8")
+    chapters = find_chapters(text)
+    if not chapters:
+        raise ValueError("没有识别到章节，请确认正文使用“第X章”格式")
+    save_chapters(chapters, book_path)
+    return len(chapters)
 
 
 def main():
     print("正在读取小说...")
 
-    with open(NOVEL_FILE,"r",encoding="utf-8") as f:
-        text=f.read()
-
+    book_path = BookPaths(BOOK_ID)
     print("正在分析章节...")
-
-    chapters=find_chapters(text)
-
-    print(f"发现 {len(chapters)} 个章节")
-
-    save_chapters(chapters)
+    chapter_count = split_book(book_path)
+    print(f"发现 {chapter_count} 个章节")
 
     print("完成！")
 

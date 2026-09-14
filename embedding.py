@@ -1,6 +1,8 @@
 import os
 import chromadb
 import shutil
+from collections.abc import Callable
+from pathlib import Path
 from FlagEmbedding import FlagAutoModel
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
@@ -8,6 +10,7 @@ from config import (
     BOOK_ID,
     BookPaths,
     EMBEDDING_BATCH_SIZE,
+    EMBEDDING_PROGRESS_BATCH_SIZE,
     EMBEDDING_CHUNK_OVERLAP,
     EMBEDDING_CHUNK_SIZE,
     EMBEDDING_USE_FP16,
@@ -17,7 +20,6 @@ from config import (
     SEMANTIC_SEARCH_DEFAULT_N,
     SEMANTIC_SEARCH_TOP_K,
     VECTOR_COLLECTION_NAME,
-    VECTOR_DB_BATCH_SIZE,
 )
 
 
@@ -101,7 +103,11 @@ def split_text(text,size=EMBEDDING_CHUNK_SIZE,overlap=EMBEDDING_CHUNK_OVERLAP):
         for i in range(0,len(text),step)
     ]
 
-def build_embedding(book_path: BookPaths):
+def build_embedding(
+    book_path: BookPaths,
+    output_dir: Path,
+    on_progress: Callable[[int, int], None] | None = None,
+):
     chapter_dir = book_path.chapter_dir
 
     ids=[]
@@ -143,20 +149,32 @@ def build_embedding(book_path: BookPaths):
 
     print(f"共{len(documents)}个文本块")
 
-    vectors=get_model().encode(
-        documents,
-        batch_size=EMBEDDING_BATCH_SIZE
-    )
+    if not documents:
+        raise ValueError("没有可用于向量化的章节正文")
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+    vector_client = chromadb.PersistentClient(path=output_dir)
+    try:
+        collection = vector_client.get_or_create_collection(name=VECTOR_COLLECTION_NAME)
+        model = get_model()
+        total = len(documents)
 
-    collection=get_collection(book_path)
-    for i in range(0,len(ids),VECTOR_DB_BATCH_SIZE):
-        collection.add(
-            ids=ids[i:i+VECTOR_DB_BATCH_SIZE],
-            documents=documents[i:i+VECTOR_DB_BATCH_SIZE],
-            embeddings=vectors[i:i+VECTOR_DB_BATCH_SIZE].tolist(),
-            metadatas=metadatas[i:i+VECTOR_DB_BATCH_SIZE]
-        )
+        for i in range(0, total, EMBEDDING_PROGRESS_BATCH_SIZE):
+            end = min(i + EMBEDDING_PROGRESS_BATCH_SIZE, total)
+            vectors = model.encode(
+                documents[i:end],
+                batch_size=EMBEDDING_BATCH_SIZE,
+            )
+            collection.add(
+                ids=ids[i:end],
+                documents=documents[i:end],
+                embeddings=vectors.tolist(),
+                metadatas=metadatas[i:end],
+            )
+            if on_progress is not None:
+                on_progress(end, total)
+    finally:
+        vector_client.close()
 
     print("embedding完成")
 
@@ -203,7 +221,7 @@ def search(query,book_path: BookPaths,n=SEMANTIC_SEARCH_DEFAULT_N,top_k=SEMANTIC
 if __name__=="__main__":
     #第一次运行取消注释
     #reset_db(BookPaths(BOOK_ID))
-    #build_embedding(BookPaths(BOOK_ID))
+    #build_embedding(BookPaths(BOOK_ID), BookPaths(BOOK_ID).vector_db_dir)
 
     for item in search("程斌初次遇见文雯", BookPaths(BOOK_ID)):
         meta=item["metadata"]

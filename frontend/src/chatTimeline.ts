@@ -1,4 +1,4 @@
-import type { SavedConversation } from "./api";
+import type { ConversationResponse } from "./api";
 
 export type ToolStatus = "running" | "completed" | "error";
 
@@ -43,7 +43,7 @@ function parseToolResult(content: string | null): unknown {
   }
 }
 
-export function timelineFromConversation(conversation: SavedConversation): TimelineItem[] {
+export function timelineFromConversation(conversation: ConversationResponse): TimelineItem[] {
   const items: TimelineItem[] = [];
   const toolCalls = new Map<string, { name: string; arguments: unknown }>();
 

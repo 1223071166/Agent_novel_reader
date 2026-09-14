@@ -3,11 +3,11 @@ import {
   applyChatEvent,
   timelineFromConversation,
 } from "../chatTimeline";
-import type { SavedConversation } from "../api";
+import type { ConversationResponse } from "../api";
 //D
 describe("chat timeline", () => {
   it("can restore saved user, tool, and assistant messages", () => {
-    const conversation: SavedConversation = {
+    const conversation: ConversationResponse = {
       id: "conversation-1",
       book_id: "book-1",
       title: "请读取第一章",
