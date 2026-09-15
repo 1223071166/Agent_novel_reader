@@ -71,6 +71,9 @@ class ChatService:
             conversation = self._conversations.get(conversation_id)
             if conversation is not None and conversation.book_id != book_id:
                 raise ValueError("该会话属于另一本书")
+            lock = self._locks.get(conversation_id)
+            if lock is not None and lock.locked():
+                raise ValueError("该会话正在生成回复，请先停止生成")
             self._store.delete_conversation(conversation_id, book_id)
             self._conversations.pop(conversation_id, None)
             self._locks.pop(conversation_id, None)
@@ -106,19 +109,23 @@ class ChatService:
 
         book_path = BookPaths(book_id)
         load_titles(book_path)
-        lock = self._locks[conversation_id]
-        
-        if not lock.acquire(blocking=False):
+        with self._conversations_lock:
+            lock = self._locks[conversation_id]
+            acquired = lock.acquire(blocking=False)
+            if acquired:
+                cancel_event = self._cancel_events.get(conversation_id)
+                if cancel_event is None:
+                    cancel_event = threading.Event()
+                    self._cancel_events[conversation_id] = cancel_event
+
+        if not acquired:
             yield ChatEvent("error", {
                 "code": "conversation_busy",
                 "message": "该会话正在处理上一条消息，请稍候再试",
             })
             return
-        cancel_event = threading.Event()
-        self._cancel_events[conversation_id] = cancel_event
         message_id = str(uuid.uuid4())
         try:
-            #print("进入 try:", conversation_id)
             self._append_message(
                 conversation_id,
                 Message(id=message_id, role="user", content=user_content),
@@ -142,7 +149,6 @@ class ChatService:
         finally:
             self._cancel_events.pop(conversation_id, None)
             lock.release()
-            #print("锁已经释放（finally）:", conversation_id)
 
     def _run_model(self, book_path: BookPaths, conversation_id: str,cancel_event:threading.Event) -> Iterator[ChatEvent]:
         for round_index in range(1, MAX_TOOL_ROUNDS + 1):

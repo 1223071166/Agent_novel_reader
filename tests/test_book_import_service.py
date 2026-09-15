@@ -1,3 +1,4 @@
+import json
 import tempfile
 import time
 import unittest
@@ -77,6 +78,41 @@ class BookImportServiceTests(unittest.TestCase):
                 discarded_root = books_dir / discarded["book_id"]
                 service.discard_import(discarded["book_id"])
                 self.assertFalse(discarded_root.exists())
+
+    def test_running_import_is_recovered_as_failed_after_restart(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            books_dir = root / "books"
+            database_dir = root / "database"
+            book_id = "book_123456789abc"
+            book_root = books_dir / book_id
+            book_root.mkdir(parents=True)
+            marker = book_root / IMPORT_STATE_FILE
+            marker.write_text(json.dumps({
+                "book_id": book_id,
+                "status": "encoding",
+                "processed": 12,
+                "total": 100,
+                "message": "正在生成文本向量",
+                "error": None,
+            }), encoding="utf-8")
+            building_dir = database_dir / "vector_db" / f".building-{book_id}-test"
+            building_dir.mkdir(parents=True)
+
+            with (
+                patch.object(config, "BOOKS_DIR", books_dir),
+                patch.object(config, "DATABASE_DIR", database_dir),
+                patch.object(import_module, "BOOKS_DIR", books_dir),
+                patch.object(import_module, "DATABASE_DIR", database_dir),
+            ):
+                service = BookImportService()
+                recovered = service.get_status(book_id)
+
+            self.assertEqual(recovered["status"], "failed")
+            self.assertEqual(recovered["processed"], 12)
+            self.assertIn("后端重启", recovered["error"])
+            self.assertTrue(marker.exists())
+            self.assertFalse(building_dir.exists())
 
 
 if __name__ == "__main__":

@@ -44,18 +44,6 @@ class BookPaths:
         return DATABASE_DIR / "vector_db" / self.book_id
 
 
-DEFAULT_BOOK_PATHS = BookPaths(BOOK_ID)
-
-# Backward-compatible aliases for modules that have not been migrated yet.
-BOOK_INFORMATION_DIR = DEFAULT_BOOK_PATHS.root
-NOVEL_FILE = DEFAULT_BOOK_PATHS.novel_file
-NOVEL_BACKUP_FILE = DEFAULT_BOOK_PATHS.root / "novel.txt.bak"
-CHAPTER_DIR = DEFAULT_BOOK_PATHS.chapter_dir
-CHAPTER_LIST = DEFAULT_BOOK_PATHS.chapter_list
-INFO_FILE = DEFAULT_BOOK_PATHS.info_file
-SUMMARY_DIR = DEFAULT_BOOK_PATHS.summary_dir
-DB_DIR = DEFAULT_BOOK_PATHS.vector_db_dir
-
 VECTOR_COLLECTION_NAME = "novel"
 MESSAGE_STORAGE_FILE = DATABASE_DIR / "conversations.db"
 # API configuration.

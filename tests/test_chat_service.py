@@ -270,6 +270,74 @@ class ChatServiceTests(unittest.TestCase):
         )
         self.print_success("取消会话会返回 error 且不会发送 done")
 
+    def test_busy_conversation_cannot_be_deleted(self):
+        started = threading.Event()
+        fake_client = FakeClient([BlockingResponse(started)])
+
+        with patch.object(chat_module, "client", fake_client):
+            service = chat_module.ChatService()
+            worker = threading.Thread(
+                target=lambda: list(
+                    service.stream_message(BOOK_ID, "busy-delete", "请生成长回答")
+                ),
+            )
+            worker.start()
+            self.assertTrue(started.wait(timeout=2))
+
+            with self.assertRaisesRegex(ValueError, "正在生成回复"):
+                service.delete_conversation(BOOK_ID, "busy-delete")
+
+            service.cancel_conversation(BOOK_ID, "busy-delete")
+            worker.join(timeout=2)
+            service.delete_conversation(BOOK_ID, "busy-delete")
+
+        self.assertFalse(worker.is_alive())
+        self.assertIsNone(service._store.load_conversation("busy-delete", BOOK_ID))
+        self.print_success("正在生成回复的会话不能被删除，停止后可以删除")
+
+    def test_cancelling_one_conversation_does_not_stop_another(self):
+        first_started = threading.Event()
+        second_started = threading.Event()
+        fake_client = FakeClient([
+            BlockingResponse(first_started),
+            BlockingResponse(second_started),
+        ])
+        first_events = []
+        second_events = []
+
+        with patch.object(chat_module, "client", fake_client):
+            service = chat_module.ChatService()
+            first_worker = threading.Thread(
+                target=lambda: first_events.extend(
+                    service.stream_message(BOOK_ID, "parallel-1", "第一条消息")
+                ),
+            )
+            second_worker = threading.Thread(
+                target=lambda: second_events.extend(
+                    service.stream_message(BOOK_ID, "parallel-2", "第二条消息")
+                ),
+            )
+
+            first_worker.start()
+            self.assertTrue(first_started.wait(timeout=2))
+            second_worker.start()
+            self.assertTrue(second_started.wait(timeout=2))
+
+            service.cancel_conversation(BOOK_ID, "parallel-1")
+            first_worker.join(timeout=2)
+
+            self.assertFalse(first_worker.is_alive())
+            self.assertTrue(second_worker.is_alive())
+            self.assertEqual(first_events[-1].data["code"], "user_interreption")
+            self.assertNotIn("error", [event.event for event in second_events])
+
+            service.cancel_conversation(BOOK_ID, "parallel-2")
+            second_worker.join(timeout=2)
+
+        self.assertFalse(second_worker.is_alive())
+        self.assertEqual(second_events[-1].data["code"], "user_interreption")
+        self.print_success("取消一个会话不会停止另一个并行会话")
+
 
 if __name__ == "__main__":
     unittest.main()

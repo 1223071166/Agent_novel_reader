@@ -1,4 +1,5 @@
 import json
+import uuid
 from typing import Iterator
 from urllib.parse import unquote
 
@@ -24,11 +25,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/hello")
-def hello():
-    return {"message": "Hello from FastAPI!"}
-
-
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
@@ -45,6 +41,10 @@ class CancelRequest(BaseModel):
 
 class BookInfoRequest(BaseModel):
     content: str
+
+
+class BookSelectionRequest(BaseModel):
+    book_id: str
 
 
 def _available_book_ids() -> list[str]:
@@ -70,6 +70,15 @@ def _require_book_id(value: str) -> str:
     if book_id not in _available_book_ids():
         raise HTTPException(status_code=404, detail=f"找不到书籍：{book_id}")
     return book_id
+
+
+def _write_selected_book_id(book_id: str) -> None:
+    SELECTED_BOOK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = SELECTED_BOOK_FILE.with_name(
+        f".{SELECTED_BOOK_FILE.name}.{uuid.uuid4().hex}.tmp"
+    )
+    temporary_path.write_text(book_id + "\n", encoding="utf-8")
+    temporary_path.replace(SELECTED_BOOK_FILE)
 
 def _sse_stream(events: Iterator[ChatEvent]) -> Iterator[str]:
     for event in events:
@@ -113,11 +122,22 @@ def get_books():
     )
     if selected_book_id not in book_ids:
         selected_book_id = book_ids[0] if book_ids else None
+        if selected_book_id is None:
+            SELECTED_BOOK_FILE.unlink(missing_ok=True)
+        else:
+            _write_selected_book_id(selected_book_id)
     return {
         "books": all_book_ids,
         "importing_book_ids": importing_book_ids,
         "selected_book_id": selected_book_id,
     }
+
+
+@app.put("/api/books/selected")
+def save_selected_book(request: BookSelectionRequest):
+    book_id = _require_book_id(request.book_id)
+    _write_selected_book_id(book_id)
+    return {"selected_book_id": book_id}
 
 
 @app.post("/api/book-imports", status_code=201)

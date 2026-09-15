@@ -4,7 +4,7 @@ import {
   timelineFromConversation,
 } from "../chatTimeline";
 import type { ConversationResponse } from "../api";
-//D
+
 describe("chat timeline", () => {
   it("can restore saved user, tool, and assistant messages", () => {
     const conversation: ConversationResponse = {
@@ -95,5 +95,36 @@ describe("chat timeline", () => {
     expect(items).toEqual([
       { id: "assistant-1", type: "assistant", content: "你好，读者" },
     ]);
+  });
+
+  it("matches a streamed tool result with its running tool call", () => {
+    const started = applyChatEvent([], {
+      event: "tool_start",
+      data: {
+        tool_call_id: "call-1",
+        name: "get_chapter",
+        arguments: { chapter_id: 3 },
+      },
+    });
+    const completed = applyChatEvent(started, {
+      event: "tool_result",
+      data: {
+        tool_call_id: "call-1",
+        result: "第三章正文",
+        error: false,
+      },
+    });
+
+    expect(completed).toHaveLength(1);
+    expect(completed[0]).toMatchObject({
+      type: "tool",
+      tool: {
+        id: "call-1",
+        name: "get_chapter",
+        arguments: { chapter_id: 3 },
+        result: "第三章正文",
+        status: "completed",
+      },
+    });
   });
 });

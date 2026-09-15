@@ -1,54 +1,25 @@
 import { useState, useEffect } from "react";
-import { cancelStream, deleteConversation as deleteConversationApi, loadBookSelection, loadConversations, streamChat } from "./api";
-import type { ConversationResponse } from "./api";
+import { cancelStream, deleteConversation as deleteConversationApi, loadBookSelection, loadConversations, saveBookSelection, streamChat } from "./api";
 import {
   applyChatEvent,
   appendUserItem,
-  timelineFromConversation,
 } from "./chatTimeline";
-import type { TimelineItem } from "./chatTimeline";
 import BookImporter from "./BookImporter";
-//npm --prefix frontend run dev
-type ConversationState = {
-  id: string;
-  title: string;
-  messages: TimelineItem[];
-};
+import {
+  makeConversation,
+  makeWorkspace,
+  updateConversationInWorkspace,
+} from "./workspaceState";
+import type { ConversationState, BookWorkspace } from "./workspaceState";
 
-type BookWorkspace = {
-  bookId: string;
-  conversations: ConversationState[];
-  activeConversationId: string;
-};
 
 type BookImporterTarget = {
   bookId?: string;
 };
 
-const makeConversation = (): ConversationState => ({
-  id: crypto.randomUUID(),
-  title: "新对话",
-  messages: [],
-});
-
-const conversationFromResponse = (conversation: ConversationResponse): ConversationState => ({
-  id: conversation.id,
-  title: conversation.title,
-  messages: timelineFromConversation(conversation),
-});
-
-const makeWorkspace = (
-  bookId: string,
-  conversationResponses: ConversationResponse[],
-): BookWorkspace => {
-  const conversations = conversationResponses.length > 0
-    ? conversationResponses.map(conversationFromResponse)
-    : [makeConversation()];
-  return {
-    bookId,
-    conversations,
-    activeConversationId: conversations[0].id,
-  };
+type RunningRequest = {
+  bookId: string;
+  conversationId: string;
 };
 
 const toolDisplayName = (name: string, args: unknown) => {
@@ -88,11 +59,10 @@ function App() {
   const [books, setBooks] = useState<string[]>([]);
   const [importingBookIds, setImportingBookIds] = useState<string[]>([]);
   const [workspace, setWorkspace] = useState<BookWorkspace | null>(null);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [runningRequests, setRunningRequests] = useState<RunningRequest[]>([]);
   const [switchingBook, setSwitchingBook] = useState(false);
   const [bookImporterTarget, setBookImporterTarget] = useState<BookImporterTarget | null>(null);
-  const [error, setError] = useState("");
+  const [appError, setAppError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -110,11 +80,11 @@ function App() {
         setWorkspace(selection.selected_book_id
           ? makeWorkspace(selection.selected_book_id, savedConversations)
           : null);
-        setError(selection.books.length === 0 ? "还没有书籍，可以先导入一本小说" : "");
+        setAppError(selection.books.length === 0 ? "还没有书籍，可以先导入一本小说" : "");
       })
       .catch((requestError) => {
         if (!cancelled) {
-          setError(requestError instanceof Error ? requestError.message : "加载历史会话失败");
+          setAppError(requestError instanceof Error ? requestError.message : "加载历史会话失败");
         }
       });
     return () => { cancelled = true; };
@@ -125,34 +95,43 @@ function App() {
   const activeConversation = workspace?.conversations.find(
     (conversation) => conversation.id === workspace.activeConversationId,
   );
+  const input = activeConversation?.draft ?? "";
+  const isConversationRunning = (targetBookId: string, conversationId: string) => (
+    runningRequests.some((request) => (
+      request.bookId === targetBookId && request.conversationId === conversationId
+    ))
+  );
+  const activeConversationRunning = Boolean(
+    bookId
+    && activeConversation
+    && isConversationRunning(bookId, activeConversation.id),
+  );
+  const hasRunningRequests = runningRequests.length > 0;
 
   const updateConversation = (
     targetBookId: string,
     conversationId: string,
     update: (conversation: ConversationState) => ConversationState,
   ) => {
-    setWorkspace((previous) => {
-      if (!previous || previous.bookId !== targetBookId) return previous;
-      return {
-        ...previous,
-        conversations: previous.conversations.map((conversation) => (
-          conversation.id === conversationId ? update(conversation) : conversation
-        )),
-      };
-    });
+    setWorkspace((previous) => updateConversationInWorkspace(
+      previous,
+      targetBookId,
+      conversationId,
+      update,
+    ));
   };
 
   const switchBook = async (nextBookId: string) => {
-    if (nextBookId === workspace?.bookId || loading || switchingBook) return;
+    if (nextBookId === workspace?.bookId || hasRunningRequests || switchingBook) return;
 
     setSwitchingBook(true);
-    setError("");
+    setAppError("");
     try {
       const savedConversations = await loadConversations(nextBookId);
+      await saveBookSelection(nextBookId);
       setWorkspace(makeWorkspace(nextBookId, savedConversations));
-      setInput("");
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "切换书籍失败");
+      setAppError(requestError instanceof Error ? requestError.message : "切换书籍失败");
     } finally {
       setSwitchingBook(false);
     }
@@ -192,17 +171,23 @@ function App() {
 
   const sendMessage = async () => {
     const text = input.trim();
-    if (!text || loading || !bookId || !activeConversation) return;
+    if (!text || !bookId || !activeConversation) return;
 
     const requestBookId = bookId;
     const conversationId = activeConversation.id;
+    if (isConversationRunning(requestBookId, conversationId)) return;
+
     updateConversation(requestBookId, conversationId, (conversation) => ({
-        ...conversation,
-        messages: appendUserItem(conversation.messages, text),
+      ...conversation,
+      messages: appendUserItem(conversation.messages, text),
+      draft: "",
+      error: "",
     }));
-    setInput("");
-    setLoading(true);
-    setError("");
+    setRunningRequests((previous) => [
+      ...previous,
+      { bookId: requestBookId, conversationId },
+    ]);
+    setAppError("");
     try {
       await streamChat(requestBookId, conversationId, text, ({ event, data }) => {
         if (event === "error") {
@@ -218,9 +203,14 @@ function App() {
       });
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "聊天请求失败";
-      setError(message);
+      updateConversation(requestBookId, conversationId, (conversation) => ({
+        ...conversation,
+        error: message,
+      }));
     } finally {
-      setLoading(false);
+      setRunningRequests((previous) => previous.filter((request) => (
+        request.bookId !== requestBookId || request.conversationId !== conversationId
+      )));
     }
   };
 
@@ -232,8 +222,7 @@ function App() {
       conversations: [...previous.conversations, conversation],
       activeConversationId: conversation.id,
     } : previous);
-    setInput("");
-    setError("");
+    setAppError("");
   };
 
   const deleteConversation = async (conversationId: string) => {
@@ -241,6 +230,7 @@ function App() {
     if (!bookId || !conversation || switchingBook) return;
 
     const requestBookId = bookId;
+    if (isConversationRunning(requestBookId, conversationId)) return;
 
     try {
       await deleteConversationApi(requestBookId, conversation.id);
@@ -264,11 +254,33 @@ function App() {
         return { ...previous, conversations: remaining, activeConversationId };
       });
       if (activeConversation?.id === conversationId) {
-        setError("");
+        setAppError("");
       }
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "删除会话失败");
+      setAppError(requestError instanceof Error ? requestError.message : "删除会话失败");
     }
+  };
+
+  const stopActiveConversation = () => {
+    if (!bookId || !activeConversation) return;
+
+    const requestBookId = bookId;
+    const conversationId = activeConversation.id;
+    void cancelStream(requestBookId, conversationId).catch((requestError) => {
+      const message = requestError instanceof Error ? requestError.message : "取消请求失败";
+      updateConversation(requestBookId, conversationId, (conversation) => ({
+        ...conversation,
+        error: message,
+      }));
+    });
+  };
+
+  const submitCurrentConversation = () => {
+    if (activeConversationRunning) {
+      stopActiveConversation();
+      return;
+    }
+    void sendMessage();
   };
 
   return (
@@ -282,15 +294,15 @@ function App() {
           </div>
         </div>
 
-        <button className="new-chat" onClick={createConversation} disabled={!workspace || loading || switchingBook}>
+        <button className="new-chat" onClick={createConversation} disabled={!workspace || switchingBook}>
           <span className="new-chat-icon">＋</span>
-          <span>新建聊天</span>
+          <span>新对话</span>
         </button>
 
         <button
           className="import-book"
           type="button"
-          disabled={loading || switchingBook}
+          disabled={hasRunningRequests || switchingBook}
           onClick={() => setBookImporterTarget({})}
         >
           <span className="new-chat-icon">⇧</span>
@@ -312,7 +324,7 @@ function App() {
                 <span className="conversation-name">{conversation.title}</span>
                 <button
                   className="delete-chat"
-                  disabled={switchingBook || (loading && conversation.id === activeConversation?.id)}
+                  disabled={switchingBook || Boolean(bookId && isConversationRunning(bookId, conversation.id))}
                   aria-label={`删除对话：${conversation.title}`}
                   title="删除对话"
                   onClick={(event) => {
@@ -328,7 +340,6 @@ function App() {
 
         <div className="sidebar-bottom">
           <div className="sidebar-item"><span>⚙</span> 设置</div>
-          <div className="sidebar-item"><span>◉</span> 本地模式</div>
         </div>
       </aside>
 
@@ -339,7 +350,7 @@ function App() {
             <select
               aria-label="切换书籍"
               value={bookId ?? ""}
-              disabled={books.length === 0 || loading || switchingBook}
+              disabled={books.length === 0 || hasRunningRequests || switchingBook}
               onChange={(event) => selectBook(event.target.value)}
             >
               {!bookId && <option value="" disabled>选择书籍</option>}
@@ -361,7 +372,6 @@ function App() {
               <div className="empty-logo"><span>✦</span></div>
               <div className="empty-eyebrow">AgentReader</div>
               <h1>有什么可以帮忙的？</h1>
-              <p>从小说内容中检索细节，开始一段新的探索。</p>
             </div>
           ) : (
             <div className="messages">
@@ -392,35 +402,36 @@ function App() {
         </section>
 
         <div className="input-area">
-          {error && <div className="input-error">{error}</div>}
+          {appError && <div className="input-error">{appError}</div>}
+          {activeConversation?.error && (
+            <div className="input-error">{activeConversation.error}</div>
+          )}
           <form className="input-box" onSubmit={(event) => {
-             event.preventDefault();
-             if(loading){
-                if (bookId && activeConversation) {
-                  void cancelStream(bookId, activeConversation.id).catch((requestError) => {
-                    setError(requestError instanceof Error ? requestError.message : "取消请求失败");
-                  });
-                }
-             }
-                
-             else
-              void sendMessage(); 
-             }}>
+            event.preventDefault();
+            submitCurrentConversation();
+          }}>
             <textarea
               value={input}
               disabled={!workspace || switchingBook}
-              onChange={(event) => setInput(event.target.value)}
+              onChange={(event) => {
+                if (!bookId || !activeConversation) return;
+                const draft = event.target.value;
+                updateConversation(bookId, activeConversation.id, (conversation) => ({
+                  ...conversation,
+                  draft,
+                }));
+              }}
               placeholder="发送消息"
               rows={1}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
-                  void sendMessage();
+                  event.currentTarget.form?.requestSubmit();
                 }
               }}
             />
-            <button className="send-button" type="submit" disabled={switchingBook || ((!input.trim()&&!loading) || !activeConversation)}>
-              {loading ? "■" : "↑"}
+            <button className="send-button" type="submit" disabled={switchingBook || !activeConversation || (!input.trim() && !activeConversationRunning)}>
+              {activeConversationRunning ? "■" : "↑"}
             </button>
           </form>
           <div className="input-hint"><span>✦</span> 回答来自小说内容检索，请检查重要信息。</div>

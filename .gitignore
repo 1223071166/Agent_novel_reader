@@ -8,3 +8,4 @@ data/books/
 data/selected_book.txt
 data/database/vector_db/
 data/database/conversations.db
+frontend/dist

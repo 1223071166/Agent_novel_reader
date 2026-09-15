@@ -58,6 +58,15 @@ export async function loadBookSelection(): Promise<BookSelection> {
   return await response.json() as BookSelection;
 }
 
+export async function saveBookSelection(bookId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/books/selected`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ book_id: bookId }),
+  });
+  if (!response.ok) throw await responseError(response, "保存当前书籍失败");
+}
+
 export async function importBook(file: File): Promise<BookImportStatus> {
   const response = await fetch(`${API_BASE_URL}/api/book-imports`, {
     method: "POST",
