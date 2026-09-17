@@ -1,49 +1,14 @@
-import type { ConversationResponse } from "./api";
-
-export type ToolStatus = "running" | "completed" | "error";
-
-export type ToolCall = {
-  id: string;
-  name: string;
-  arguments: unknown;
-  result?: unknown;
-  status: ToolStatus;
-};
-
-export type TimelineItem =
-  | {
-      id: string;
-      type: "user";
-      content: string;
-    }
-  | {
-      id: string;
-      type: "assistant";
-      content: string;
-    }
-  | {
-      id: string;
-      type: "tool";
-      tool: ToolCall;
-    };
-
-export type TimelineEvent = {
-  event: string;
-  data: Record<string, unknown>;
-};
+import type {
+  ChatEvent,
+  Conversation,
+  TimelineItem,
+  ToolResult,
+  ToolStatus,
+} from "./types";
 
 const newId = () => crypto.randomUUID();
 
-function parseToolResult(content: string | null): unknown {
-  if (content === null) return undefined;
-  try {
-    return JSON.parse(content);
-  } catch {
-    return content;
-  }
-}
-
-export function timelineFromConversation(conversation: ConversationResponse): TimelineItem[] {
+export function timelineFromConversation(conversation: Conversation): TimelineItem[] {
   const items: TimelineItem[] = [];
   const toolCalls = new Map<string, { name: string; arguments: unknown }>();
 
@@ -77,7 +42,7 @@ export function timelineFromConversation(conversation: ConversationResponse): Ti
           id: message.tool_call_id ?? newId(),
           name: call?.name ?? "unknown",
           arguments: call?.arguments ?? {},
-          result: parseToolResult(message.content),
+          result: message.tool_result ?? undefined,
           status: "completed",
         },
       });
@@ -94,7 +59,7 @@ export function appendUserItem(items: TimelineItem[], content: string): Timeline
   ];
 }
 
-export function applyChatEvent(items: TimelineItem[], { event, data }: TimelineEvent): TimelineItem[] {
+export function applyChatEvent(items: TimelineItem[], { event, data }: ChatEvent): TimelineItem[] {
   if (event === "token") {
     const content = String(data.content ?? "");
     if (!content) return items;
@@ -140,7 +105,7 @@ export function applyChatEvent(items: TimelineItem[], { event, data }: TimelineE
             id: toolId || newId(),
             name: String(data.name ?? "unknown"),
             arguments: data.arguments ?? {},
-            result: data.result,
+            result: data.result as ToolResult,
             status,
           },
         },
@@ -149,7 +114,7 @@ export function applyChatEvent(items: TimelineItem[], { event, data }: TimelineE
 
     return items.map((item, itemIndex) => (
       itemIndex === index && item.type === "tool"
-        ? { ...item, tool: { ...item.tool, result: data.result, status } }
+        ? { ...item, tool: { ...item.tool, result: data.result as ToolResult, status } }
         : item
     ));
   }

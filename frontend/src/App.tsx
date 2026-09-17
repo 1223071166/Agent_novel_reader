@@ -10,17 +10,12 @@ import {
   makeWorkspace,
   updateConversationInWorkspace,
 } from "./workspaceState";
-import type { ConversationState, BookWorkspace } from "./workspaceState";
-
-
-type BookImporterTarget = {
-  bookId?: string;
-};
-
-type RunningRequest = {
-  bookId: string;
-  conversationId: string;
-};
+import type {
+  BookImporterTarget,
+  BookWorkspace,
+  ChatEvent,
+  RunningRequest,
+} from "./types";
 
 const toolDisplayName = (name: string, args: unknown) => {
   const argumentsObject = args && typeof args === "object"
@@ -49,12 +44,6 @@ const toolDisplayName = (name: string, args: unknown) => {
   return name === "" ? "执行工具" : name;
 };
 
-const formatToolValue = (value: unknown) => {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(String).join("\n\n");
-  return JSON.stringify(value, null, 2) ?? "";
-};
-
 function App() {
   const [books, setBooks] = useState<string[]>([]);
   const [importingBookIds, setImportingBookIds] = useState<string[]>([]);
@@ -76,7 +65,7 @@ function App() {
       .then(({ selection, savedConversations }) => {
         if (cancelled) return;
         setBooks(selection.books);
-        setImportingBookIds(selection.importing_book_ids ?? []);
+        setImportingBookIds(selection.importing_book_ids);
         setWorkspace(selection.selected_book_id
           ? makeWorkspace(selection.selected_book_id, savedConversations)
           : null);
@@ -108,16 +97,66 @@ function App() {
   );
   const hasRunningRequests = runningRequests.length > 0;
 
-  const updateConversation = (
+  const addUserMessageToConversation = (
     targetBookId: string,
     conversationId: string,
-    update: (conversation: ConversationState) => ConversationState,
+    content: string,
   ) => {
     setWorkspace((previous) => updateConversationInWorkspace(
       previous,
       targetBookId,
       conversationId,
-      update,
+      (conversation) => ({
+        ...conversation,
+        messages: appendUserItem(conversation.messages, content),
+        draft: "",
+        error: "",
+      }),
+    ));
+  };
+
+  const applyEventToConversation = (
+    targetBookId: string,
+    conversationId: string,
+    chatEvent: ChatEvent,
+  ) => {
+    setWorkspace((previous) => updateConversationInWorkspace(
+      previous,
+      targetBookId,
+      conversationId,
+      (conversation) => ({
+        ...conversation,
+        title: chatEvent.event === "message_start" && typeof chatEvent.data.title === "string"
+          ? chatEvent.data.title
+          : conversation.title,
+        messages: applyChatEvent(conversation.messages, chatEvent),
+      }),
+    ));
+  };
+
+  const setConversationError = (
+    targetBookId: string,
+    conversationId: string,
+    error: string,
+  ) => {
+    setWorkspace((previous) => updateConversationInWorkspace(
+      previous,
+      targetBookId,
+      conversationId,
+      (conversation) => ({ ...conversation, error }),
+    ));
+  };
+
+  const setConversationDraft = (
+    targetBookId: string,
+    conversationId: string,
+    draft: string,
+  ) => {
+    setWorkspace((previous) => updateConversationInWorkspace(
+      previous,
+      targetBookId,
+      conversationId,
+      (conversation) => ({ ...conversation, draft }),
     ));
   };
 
@@ -140,7 +179,7 @@ function App() {
   const finishBookImport = async (importedBookId: string) => {
     const selection = await loadBookSelection();
     setBooks(selection.books);
-    setImportingBookIds(selection.importing_book_ids ?? []);
+    setImportingBookIds(selection.importing_book_ids);
     await switchBook(importedBookId);
     setBookImporterTarget(null);
   };
@@ -157,7 +196,7 @@ function App() {
   const finishDiscardBookImport = async () => {
     const selection = await loadBookSelection();
     setBooks(selection.books);
-    setImportingBookIds(selection.importing_book_ids ?? []);
+    setImportingBookIds(selection.importing_book_ids);
     setBookImporterTarget(null);
   };
 
@@ -177,12 +216,7 @@ function App() {
     const conversationId = activeConversation.id;
     if (isConversationRunning(requestBookId, conversationId)) return;
 
-    updateConversation(requestBookId, conversationId, (conversation) => ({
-      ...conversation,
-      messages: appendUserItem(conversation.messages, text),
-      draft: "",
-      error: "",
-    }));
+    addUserMessageToConversation(requestBookId, conversationId, text);
     setRunningRequests((previous) => [
       ...previous,
       { bookId: requestBookId, conversationId },
@@ -193,20 +227,11 @@ function App() {
         if (event === "error") {
           throw new Error(String(data.message ?? "聊天请求失败"));
         }
-        updateConversation(requestBookId, conversationId, (conversation) => ({
-          ...conversation,
-          title: event === "message_start" && typeof data.title === "string"
-            ? data.title
-            : conversation.title,
-          messages: applyChatEvent(conversation.messages, { event, data }),
-        }));
+        applyEventToConversation(requestBookId, conversationId, { event, data });
       });
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "聊天请求失败";
-      updateConversation(requestBookId, conversationId, (conversation) => ({
-        ...conversation,
-        error: message,
-      }));
+      setConversationError(requestBookId, conversationId, message);
     } finally {
       setRunningRequests((previous) => previous.filter((request) => (
         request.bookId !== requestBookId || request.conversationId !== conversationId
@@ -268,10 +293,7 @@ function App() {
     const conversationId = activeConversation.id;
     void cancelStream(requestBookId, conversationId).catch((requestError) => {
       const message = requestError instanceof Error ? requestError.message : "取消请求失败";
-      updateConversation(requestBookId, conversationId, (conversation) => ({
-        ...conversation,
-        error: message,
-      }));
+      setConversationError(requestBookId, conversationId, message);
     });
   };
 
@@ -387,7 +409,7 @@ function App() {
                         <div className="tool-card-body">
                           {item.tool.result !== undefined && (
                             <div className="tool-field">
-                              <pre>{formatToolValue(item.tool.result)}</pre>
+                              <pre>{item.tool.result.display}</pre>
                             </div>
                           )}
                         </div>
@@ -416,10 +438,7 @@ function App() {
               onChange={(event) => {
                 if (!bookId || !activeConversation) return;
                 const draft = event.target.value;
-                updateConversation(bookId, activeConversation.id, (conversation) => ({
-                  ...conversation,
-                  draft,
-                }));
+                setConversationDraft(bookId, activeConversation.id, draft);
               }}
               placeholder="发送消息"
               rows={1}

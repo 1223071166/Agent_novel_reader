@@ -1,46 +1,11 @@
-export type ChatEvent = {
-  event: string;
-  data: Record<string, unknown>;
-};
+import type {
+  BookImportStatus,
+  BookSelection,
+  ChatEvent,
+  Conversation,
+} from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
-
-export type SavedMessage = {
-  id: string;
-  role: string;
-  content: string | null;
-  tool_calls: Array<{
-    id?: string;
-    type?: string;
-    function?: { name?: string; arguments?: string };
-  }> | null;
-  tool_call_id: string | null;
-};
-
-export type ConversationResponse = {
-  id: string;
-  book_id: string;
-  title: string;
-  messages: SavedMessage[];
-};
-
-export type BookSelection = {
-  books: string[];
-  importing_book_ids: string[];
-  selected_book_id: string | null;
-};
-
-export type BookImportStatus = {
-  book_id: string;
-  original_name?: string;
-  chapter_count?: number;
-  status: "splitting" | "awaiting_info" | "ready_for_embedding" | "pending" | "loading_model" | "encoding" | "writing" | "completed" | "failed";
-  processed: number;
-  total: number;
-  message: string;
-  error: string | null;
-  info?: string;
-};
 
 async function responseError(response: Response, fallback: string): Promise<Error> {
   try {
@@ -54,7 +19,7 @@ async function responseError(response: Response, fallback: string): Promise<Erro
 
 export async function loadBookSelection(): Promise<BookSelection> {
   const response = await fetch(`${API_BASE_URL}/api/books`);
-  if (!response.ok) throw new Error(`加载书籍失败（${response.status}）`);
+  if (!response.ok) throw await responseError(response, "加载书籍失败");
   return await response.json() as BookSelection;
 }
 
@@ -126,12 +91,12 @@ export async function discardBookImport(bookId: string): Promise<void> {
   if (!response.ok) throw await responseError(response, "放弃导入失败");
 }
 
-export async function loadConversations(bookId: string): Promise<ConversationResponse[]> {
+export async function loadConversations(bookId: string): Promise<Conversation[]> {
   const query = new URLSearchParams({ book_id: bookId });
   const response = await fetch(`${API_BASE_URL}/api/conversations?${query}`);
-  if (!response.ok) throw new Error(`加载历史会话失败（${response.status}）`);
-  const body = await response.json() as { conversations?: ConversationResponse[] };
-  return body.conversations ?? [];
+  if (!response.ok) throw await responseError(response, "加载历史会话失败");
+  const body = await response.json() as { conversations: Conversation[] };
+  return body.conversations;
 }
 
 export async function deleteConversation(bookId: string, conversationId: string): Promise<void> {
@@ -140,7 +105,7 @@ export async function deleteConversation(bookId: string, conversationId: string)
     `${API_BASE_URL}/api/conversations/${encodeURIComponent(conversationId)}?${query}`,
     { method: "DELETE" },
   );
-  if (!response.ok) throw new Error(`删除会话失败（${response.status}）`);
+  if (!response.ok) throw await responseError(response, "删除会话失败");
 }
 
 export async function streamChat(
@@ -155,16 +120,7 @@ export async function streamChat(
     body: JSON.stringify({ book_id: bookId, conversation_id: conversationId, message })
   });
 
-  if (!response.ok) {
-    let detail = `请求失败（${response.status}）`;
-    try {
-      const body = await response.json();
-      if (typeof body.detail === "string") detail = body.detail;
-    } catch {
-      // Keep the HTTP status message when the server did not return JSON.
-    }
-    throw new Error(detail);
-  }
+  if (!response.ok) throw await responseError(response, "请求失败");
 
   if (!response.body) throw new Error("服务器没有返回流式响应");
 
@@ -196,6 +152,6 @@ export async function cancelStream(bookId: string, conversationId: string): Prom
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ book_id: bookId, conversation_id: conversationId }),
   });
-  if (!response.ok) throw new Error(`取消请求失败（${response.status}）`);
+  if (!response.ok) throw await responseError(response, "取消请求失败");
 }
   

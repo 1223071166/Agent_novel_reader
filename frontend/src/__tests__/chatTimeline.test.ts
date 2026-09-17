@@ -3,11 +3,11 @@ import {
   applyChatEvent,
   timelineFromConversation,
 } from "../chatTimeline";
-import type { ConversationResponse } from "../api";
+import type { Conversation } from "../types";
 
 describe("chat timeline", () => {
   it("can restore saved user, tool, and assistant messages", () => {
-    const conversation: ConversationResponse = {
+    const conversation: Conversation = {
       id: "conversation-1",
       book_id: "book-1",
       title: "请读取第一章",
@@ -18,6 +18,7 @@ describe("chat timeline", () => {
           content: "请读取第一章",
           tool_calls: null,
           tool_call_id: null,
+          tool_result: null,
         },
         {
           id: "assistant-1",
@@ -34,6 +35,7 @@ describe("chat timeline", () => {
             },
           ],
           tool_call_id: null,
+          tool_result: null,
         },
         {
           id: "tool-1",
@@ -41,6 +43,10 @@ describe("chat timeline", () => {
           content: '{"title":"第一章"}',
           tool_calls: null,
           tool_call_id: "call-1",
+          tool_result: {
+            data: { kind: "chapter", chapter_id: 1, title: "第一章", content: "正文" },
+            display: "正文",
+          },
         },
         {
           id: "assistant-2",
@@ -48,6 +54,7 @@ describe("chat timeline", () => {
           content: "第一章的内容如下。",
           tool_calls: null,
           tool_call_id: null,
+          tool_result: null,
         },
       ],
     };
@@ -71,7 +78,10 @@ describe("chat timeline", () => {
         id: "call-1",
         name: "get_chapter",
         arguments: { chapter_id: 1 },
-        result: { title: "第一章" },
+        result: {
+          data: { kind: "chapter", chapter_id: 1, title: "第一章", content: "正文" },
+          display: "正文",
+        },
         status: "completed",
       },
     });
@@ -110,7 +120,10 @@ describe("chat timeline", () => {
       event: "tool_result",
       data: {
         tool_call_id: "call-1",
-        result: "第三章正文",
+        result: {
+          data: { kind: "chapter", chapter_id: 3, title: "第三章", content: "第三章正文" },
+          display: "第三章正文",
+        },
         error: false,
       },
     });
@@ -122,7 +135,10 @@ describe("chat timeline", () => {
         id: "call-1",
         name: "get_chapter",
         arguments: { chapter_id: 3 },
-        result: "第三章正文",
+        result: {
+          data: { kind: "chapter", chapter_id: 3, title: "第三章", content: "第三章正文" },
+          display: "第三章正文",
+        },
         status: "completed",
       },
     });

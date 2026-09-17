@@ -12,6 +12,7 @@ from services.chat_service import ChatService
 from services.book_import_service import BookImportService, IMPORT_STATE_FILE
 from services.models import ChatEvent, Conversation
 from config import BOOKS_DIR, SELECTED_BOOK_FILE
+from tool_results import load_tool_result_data, make_tool_result
 #部署方法： uvicorn backend.main:app --reload
 app = FastAPI()
 chat_service = ChatService()
@@ -56,7 +57,6 @@ def _available_book_ids() -> list[str]:
         if path.is_dir() and not (path / IMPORT_STATE_FILE).exists()
     )
 
-
 def _all_book_ids() -> list[str]:
     if not BOOKS_DIR.exists():
         return []
@@ -91,6 +91,7 @@ def _sse_stream(events: Iterator[ChatEvent]) -> Iterator[str]:
 def _conversation_payload(conversation: Conversation) -> dict:
     # System messages contain the model prompt and novel metadata. They are
     # needed by the model, but should not be sent to the browser.
+    # And tool messages are not sent to the browser either, but their tool results are.
     messages = []
     for message in conversation.messages:
         if message.role == "system":
@@ -101,6 +102,11 @@ def _conversation_payload(conversation: Conversation) -> dict:
             "content": message.content,
             "tool_calls": message.tool_calls,
             "tool_call_id": message.tool_call_id,
+            "tool_result": (
+                make_tool_result(load_tool_result_data(message.content))
+                if message.role == "tool" and message.content is not None
+                else None
+            ),
         })
     return {
         "id": conversation.id,

@@ -13,6 +13,12 @@ from prompts import get_system_prompt
 from usage_stats import get_field, read_usage
 from services.conversation_store import ConversationStore
 from services.models import ChatEvent, Conversation, Message
+from tool_results import (
+    error_result,
+    format_tool_result_data,
+    load_tool_result_data,
+    make_tool_result,
+)
 
 
 MAX_TOOL_ROUNDS = 100
@@ -274,8 +280,9 @@ class ChatService:
             if name not in self._available_tools:
                 raise ValueError(f"Unknown tool: {name}")
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            result: Any = f"Tool execution failed: {exc}"
-            self._append_tool_result(conversation_id, call_id, result)
+            result_data = error_result(str(exc))
+            result = make_tool_result(result_data)
+            self._append_tool_result(conversation_id, call_id, result_data)
             yield ChatEvent("tool_result", {
                 "round": round_index,
                 "tool_call_id": call_id,
@@ -293,33 +300,37 @@ class ChatService:
             "arguments": arguments,
         })
         try:
-            result = self._available_tools[name](
+            result_data = self._available_tools[name](
                 book_path=book_path,
                 **arguments,
             )
-            is_error = False
+            if not isinstance(result_data, dict):
+                raise TypeError(f"工具 {name} 没有返回字典")
+            result = make_tool_result(result_data)
+            is_error = result_data.get("kind") == "error"
         except Exception as exc:
-            result = f"工具执行失败:{exc}"
+            result_data = error_result(str(exc))
+            result = make_tool_result(result_data)
             is_error = True
 
-        self._append_tool_result(conversation_id, call_id, result)
+        self._append_tool_result(conversation_id, call_id, result_data)
         yield ChatEvent("tool_result", {
             "round": round_index,
             "tool_call_id": call_id,
             "name": name,
             "arguments": arguments,
-            "result": result,
+            "result": result, #yield出处理后的结果
             "error": is_error,
         })
 
-    def _append_tool_result(self, conversation_id: str, call_id: str, result: Any) -> None:
+    def _append_tool_result(self, conversation_id: str, call_id: str, result: dict[str, Any]) -> None:
         self._append_message(
             conversation_id,
             Message(
                 id=str(uuid.uuid4()),
                 role="tool",
                 tool_call_id=call_id,
-                content=json.dumps(result, ensure_ascii=False, default=str),
+                content=json.dumps(result, ensure_ascii=False), #保存原始结构
             ),
         )
 
@@ -335,9 +346,14 @@ class ChatService:
 
     @staticmethod
     def _message_for_request(message: Message) -> dict[str, Any]:
+        #转换数据类型，同时将工具的原始结果加工处理
         request_message: dict[str, Any] = {"role": message.role}
         if message.content is not None:
-            request_message["content"] = message.content
+            request_message["content"] = (
+                format_tool_result_data(load_tool_result_data(message.content))
+                if message.role == "tool"
+                else message.content
+            )
         if message.tool_calls is not None:
             request_message["tool_calls"] = copy.deepcopy(message.tool_calls)
         if message.tool_call_id is not None:

@@ -1,43 +1,15 @@
 import ast
-import json
 import re
 
-from novel_tools import get_title
 from config import BOOK_ID, BookPaths
 from summaries import generate_summary
+from tool_results import ToolResult, make_tool_result
 
 book_path = BookPaths(BOOK_ID)
 
 
-def display(name:str, args:dict, result:str):
-    if name=="get_chapter_list":
-        print("已获取小说章节列表")
-    elif name=="get_chapter":
-        chapter_id=args.get("chapter_id")
-        print(f"已获取第 {chapter_id} 章（{get_title(chapter_id, book_path, '未知章节') }）的内容")
-    elif name=="search_keyword":
-        keyword=args.get("keyword")
-        print(f"已搜索关键词 '{keyword}'，共找到 {len(result)} 个章节")
-    elif name=="search_keyword_in_chapter":
-        chapter_id=args.get("chapter_id")
-        keyword=args.get("keyword")
-        print(f"已搜索第 {chapter_id} 章（{get_title(chapter_id, book_path, '未知章节') }）的关键词 '{keyword}'，共找到 {len(result['contexts'])} 个匹配项")
-    elif name=="semantic_search":
-        query=args.get("query")
-        print(f"已进行模糊搜索 '{query}'，找到前{len(result)} 个相关片段")
-    elif name=="get_summary":
-        level=args.get("level")
-        start=args.get("start")
-        if level=="whole":
-            if result!="全书总结尚未生成":
-                print("已读取全书总结")
-            else:
-                print("未获取到全书总结")
-        else:
-            if result!="该部分尚未总结":
-                print(f"已读取 {level} 总结（起始章 {start}）")
-            else:
-                print(f"未获取到 {level} 总结（起始章 {start}）")
+def display(result: ToolResult):
+    print(result["display"])
 
 
 def parse_user_tool_command(command, available_tools):
@@ -65,14 +37,10 @@ def parse_user_tool_command(command, available_tools):
 def execute_user_tool(command, available_tools):
     try:
         name,args=parse_user_tool_command(command,available_tools)
-        result=available_tools[name](*args, book_path=book_path)
+        result=make_tool_result(available_tools[name](*args, book_path=book_path))
 
         print(f"\n[tool:{name}]")
-
-        if isinstance(result,(dict,list)):
-            print(json.dumps(result,ensure_ascii=False,indent=2))
-        else:
-            print(result)
+        display(result)
 
     except Exception as e:
         print(f"\n[tool error] {e}")

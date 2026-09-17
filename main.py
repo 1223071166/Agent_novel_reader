@@ -37,13 +37,9 @@ def chat():
             elif event.event == "tool_start":
                 print(f"\n[tool:{event.data['name']}]")
             elif event.event == "tool_result" and event.data.get("error"):
-                print(f"[tool error] {event.data['result']}")
+                print(f"[tool error] {event.data['result']['display']}")
             elif event.event == "tool_result":
-                display(
-                    event.data["name"],
-                    event.data.get("arguments", {}),
-                    event.data["result"],
-                )
+                display(event.data["result"])
             elif event.event == "usage":
                 print()
                 from usage_stats import display_usage

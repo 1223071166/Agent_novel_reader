@@ -1,3 +1,4 @@
+import json
 import tempfile
 import threading
 import time
@@ -182,7 +183,10 @@ class ChatServiceTests(unittest.TestCase):
         with patch.object(
             chat_module,
             "AVAILABLE_TOOLS",
-            {"get_chapter_list": lambda book_path: "第一章"},
+            {"get_chapter_list": lambda book_path: {
+                "kind": "chapter_list",
+                "chapters": [{"chapter_id": 1, "title": "第一章"}],
+            }},
         ), patch.object(chat_module, "client", fake_client):
             service = chat_module.ChatService()
             events = list(service.stream_message(BOOK_ID, "tool", "列出章节"))
@@ -193,11 +197,21 @@ class ChatServiceTests(unittest.TestCase):
         )
         tool_result = next(event for event in events if event.event == "tool_result")
         self.assertFalse(tool_result.data["error"])
+        self.assertEqual(tool_result.data["result"]["data"]["kind"], "chapter_list")
+        self.assertEqual(tool_result.data["result"]["display"], "第 1 章：第一章")
         self.assertEqual(len(fake_client.chat.completions.calls), 2)
         self.assertEqual(
             fake_client.chat.completions.calls[1]["messages"][-1]["role"],
             "tool",
         )
+        self.assertEqual(
+            fake_client.chat.completions.calls[1]["messages"][-1]["content"],
+            "第 1 章：第一章",
+        )
+        stored = service._store.load_conversation("tool", BOOK_ID)
+        stored_result = json.loads(stored.messages[-2].content)
+        self.assertEqual(stored_result["kind"], "chapter_list")
+        self.assertNotIn("display", stored_result)
         self.print_success("工具调用完成后可以继续生成最终回答")
 
     def test_invalid_tool_arguments_return_tool_error_and_continue(self):
@@ -212,7 +226,8 @@ class ChatServiceTests(unittest.TestCase):
 
         tool_result = next(event for event in events if event.event == "tool_result")
         self.assertTrue(tool_result.data["error"])
-        self.assertIn("Tool execution failed", tool_result.data["result"])
+        self.assertEqual(tool_result.data["result"]["data"]["kind"], "error")
+        self.assertTrue(tool_result.data["result"]["display"].startswith("工具执行失败："))
         self.assertEqual(events[-1].event, "done")
         self.print_success("工具参数错误会返回 tool error，并允许流程继续")
 

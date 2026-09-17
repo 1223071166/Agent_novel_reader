@@ -7,7 +7,7 @@ import {
   saveBookInfo,
   startBookEmbedding,
 } from "./api";
-import type { BookImportStatus } from "./api";
+import type { BookImportStatus } from "./types";
 
 type BookImporterProps = {
   initialBookId?: string;

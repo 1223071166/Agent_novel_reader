@@ -1,22 +1,11 @@
-import type { ConversationResponse } from "./api";
 import { timelineFromConversation } from "./chatTimeline";
-import type { TimelineItem } from "./chatTimeline";
+import type {
+  BookWorkspace,
+  Conversation,
+  FrontendConversation,
+} from "./types";
 
-export type ConversationState = {
-  id: string;
-  title: string;
-  messages: TimelineItem[];
-  draft: string;
-  error: string;
-};
-
-export type BookWorkspace = {
-  bookId: string;
-  conversations: ConversationState[];
-  activeConversationId: string;
-};
-
-export const makeConversation = (): ConversationState => ({
+export const makeConversation = (): FrontendConversation => ({
   id: crypto.randomUUID(),
   title: "新对话",
   messages: [],
@@ -24,7 +13,7 @@ export const makeConversation = (): ConversationState => ({
   error: "",
 });
 
-const conversationFromResponse = (conversation: ConversationResponse): ConversationState => ({
+const conversationFromResponse = (conversation: Conversation): FrontendConversation => ({
   id: conversation.id,
   title: conversation.title,
   messages: timelineFromConversation(conversation),
@@ -34,7 +23,7 @@ const conversationFromResponse = (conversation: ConversationResponse): Conversat
 
 export const makeWorkspace = (
   bookId: string,
-  conversationResponses: ConversationResponse[],
+  conversationResponses: Conversation[],
 ): BookWorkspace => {
   const conversations = conversationResponses.length > 0
     ? conversationResponses.map(conversationFromResponse)
@@ -50,7 +39,7 @@ export function updateConversationInWorkspace(
   workspace: BookWorkspace | null,
   targetBookId: string,
   conversationId: string,
-  update: (conversation: ConversationState) => ConversationState,
+  update: (conversation: FrontendConversation) => FrontendConversation,
 ): BookWorkspace | null {
   if (!workspace || workspace.bookId !== targetBookId) return workspace;
   return {

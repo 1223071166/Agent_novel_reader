@@ -1,9 +1,9 @@
-import os
 import re
 
 from config import BookPaths
 from summaries import get_summary as _get_summary
 from embedding import search
+from tool_results import ToolResultData, error_result
 embedding_search = search
 
 chapter_cache={}
@@ -32,8 +32,8 @@ def read_chapter(chapter_id, book_path: BookPaths):
         return chapter_cache[cache_key]
 
     path=book_path.chapter_dir / f"{chapter_id}.txt"
-    if not os.path.isfile(path):
-        return {"error": f"不存在第 {chapter_id} 章"}
+    if not path.is_file():
+        return None
 
     with open(path,"r",encoding="utf-8") as f:
         content=f.read()
@@ -45,19 +45,29 @@ def read_chapter(chapter_id, book_path: BookPaths):
     return chapter
 
 #可用工具
-def get_chapter_list(book_path: BookPaths):
+def get_chapter_list(book_path: BookPaths) -> ToolResultData:
     """获取小说章节列表"""
-    with open(book_path.chapter_list,"r",encoding="utf-8") as f:
-        return f.read()
+    return {
+        "kind": "chapter_list",
+        "chapters": [
+            {"chapter_id": chapter_id, "title": title}
+            for chapter_id, title in sorted(load_titles(book_path).items())
+        ],
+    }
 
 
-def get_chapter(chapter_id:int, book_path: BookPaths):
+def get_chapter(chapter_id:int, book_path: BookPaths) -> ToolResultData:
     """获取指定章节正文"""
     chapter=read_chapter(chapter_id, book_path)
     if chapter is None:
-        return {"error": f"不存在第 {chapter_id} 章"}
+        return error_result(f"不存在第 {chapter_id} 章")
 
-    return chapter["content"]
+    return {
+        "kind": "chapter",
+        "chapter_id": chapter_id,
+        "title": chapter["title"],
+        "content": chapter["content"],
+    }
 
 
 def iter_chapters(book_path: BookPaths):
@@ -68,25 +78,29 @@ def iter_chapters(book_path: BookPaths):
             yield chapter_id, chapter
 
 
-def search_keyword(keyword:str, book_path: BookPaths):
+def search_keyword(keyword:str, book_path: BookPaths) -> ToolResultData:
     """搜索关键词出现的章节"""
     result=[]
     for chapter_id, chapter in iter_chapters(book_path):
         text=chapter["content"]
         count=text.count(keyword)
         if count>0:
-            result.append(f"第 {chapter_id} 章：{chapter['title']}，出现次数：{count}")
-    return result
+            result.append({
+                "chapter_id": chapter_id,
+                "title": chapter["title"],
+                "count": count,
+            })
+    return {"kind": "keyword_search", "keyword": keyword, "matches": result}
 
 
-def search_keyword_in_chapter(chapter_id:int, keyword:str, book_path: BookPaths):
+def search_keyword_in_chapter(chapter_id:int, keyword:str, book_path: BookPaths) -> ToolResultData:
     """搜索指定章节关键词上下文"""
     if not keyword:
-        return {"error": "关键词不能为空"}
+        return error_result("关键词不能为空")
     
     chapter=read_chapter(chapter_id, book_path)
     if chapter is None:
-        return {"error": f"不存在第 {chapter_id} 章"}
+        return error_result(f"不存在第 {chapter_id} 章")
 
     text=chapter["content"]
 
@@ -102,37 +116,47 @@ def search_keyword_in_chapter(chapter_id:int, keyword:str, book_path: BookPaths)
         left=max(0,index-length//2)
         right=min(len(text),index+len(keyword)+length//2)
 
-        result.append(
-            text[left:right]+'\n'
-        )
-
-        # if len(result)>=20:
-        #     result.append("...（结果过多，已截断）")
-        #     break
+        result.append({
+            "start": index,
+            "end": index + len(keyword),
+            "excerpt": text[left:right],
+        })
 
         start=index+len(keyword)
-    title = load_titles(book_path).get(chapter_id, "")
-    return f"搜索了第{chapter_id}章({title})内的关键词{keyword},共找到{len(result)}个结果，以下为上下文：\n" + "\n".join(result)
+    return {
+        "kind": "chapter_keyword_search",
+        "chapter_id": chapter_id,
+        "title": chapter["title"],
+        "keyword": keyword,
+        "matches": result,
+    }
 
-def semantic_search(query:str,book_path: BookPaths,n:int=10):
+def semantic_search(query:str,book_path: BookPaths,n:int=10) -> ToolResultData:
     """使用embedding进行小说语义检索，返回最相关文本片段"""
     global embedding_search
 
     results=embedding_search(query,n=n,book_path=book_path)
 
-    output=[]
-
+    matches=[]
     for item in results:
         metadata = item["metadata"]
-        output.append(
-            f"第{metadata['chapter']}章（{metadata['title']}）：\n"
-            f"{item['text'][:500]}\n"
-        )
-    return output
+        matches.append({
+            "chapter_id": int(metadata["chapter"]),
+            "title": str(metadata["title"]),
+            "chunk": int(metadata["chunk"]),
+            "score": float(item["score"]),
+            "text": item["text"][:500],
+        })
+    return {"kind": "semantic_search", "query": query, "matches": matches}
 
 
-def get_summary(level: str,book_path: BookPaths, start: int | None = None):
-    return _get_summary(level, book_path, start)
+def get_summary(level: str,book_path: BookPaths, start: int | None = None) -> ToolResultData:
+    return {
+        "kind": "summary",
+        "level": level,
+        "start": start,
+        "content": _get_summary(level, book_path, start),
+    }
 
 
 TOOLS=[
@@ -259,10 +283,6 @@ AVAILABLE_TOOLS={
     "semantic_search":semantic_search,
     "get_summary":get_summary
 }
-
-
-def get_title(chapter_id,book_path: BookPaths, default=""):
-    return load_titles(book_path).get(chapter_id, default)
 
 
 def build_tools(use_summary_tool=True):

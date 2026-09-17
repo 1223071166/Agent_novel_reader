@@ -3,7 +3,7 @@ import {
   makeWorkspace,
   updateConversationInWorkspace,
 } from "../workspaceState";
-import type { BookWorkspace } from "../workspaceState";
+import type { BookWorkspace } from "../types";
 
 const workspace: BookWorkspace = {
   bookId: "book-1",
