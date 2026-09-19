@@ -1,6 +1,8 @@
 import os
 import chromadb
+import re
 import shutil
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from FlagEmbedding import FlagAutoModel
@@ -51,6 +53,7 @@ def get_reranker():
 
 
 _collections={}
+_lexical_corpora={}
 def get_collection(book_path: BookPaths):
     """获取指定小说的向量集合。"""
     db_dir = book_path.vector_db_dir
@@ -75,6 +78,7 @@ def reset_db(book_path: BookPaths):
         book_path.vector_db_dir,
         ignore_errors=True
     )
+    _lexical_corpora.pop(db_key, None)
 
 
 def rerank(query, documents):
@@ -96,6 +100,83 @@ def rerank(query, documents):
         scores=reranker_model(**inputs).logits.squeeze(-1)
 
     return scores.tolist()
+
+
+def _normalize_search_text(text: str) -> str:
+    """Normalize punctuation/spacing while retaining Chinese and word characters."""
+    normalized = unicodedata.normalize("NFKC", text).lower()
+    return re.sub(r"[^\w\u4e00-\u9fff]+", "", normalized)
+
+
+def _ngram_coverage(query: str, document: str, size: int) -> float:
+    if len(query) < size:
+        return 0.0
+    grams = {query[index:index + size] for index in range(len(query) - size + 1)}
+    if not grams:
+        return 0.0
+    return sum(gram in document for gram in grams) / len(grams)
+
+
+def _lexical_score(query: str, document: str) -> float:
+    """Character n-gram recall complements embeddings for names and small typos."""
+    if not query or not document:
+        return 0.0
+    score = (
+        0.15 * _ngram_coverage(query, document, 1)
+        + 0.35 * _ngram_coverage(query, document, 2)
+        + 0.50 * _ngram_coverage(query, document, 3)
+    )
+    if query in document:
+        score += 0.5
+    return score
+
+
+def _get_lexical_corpus(collection, book_path: BookPaths):
+    db_key = str(book_path.vector_db_dir.resolve())
+    if db_key not in _lexical_corpora:
+        data = collection.get(include=["documents", "metadatas"])
+        documents = data.get("documents") or []
+        metadatas = data.get("metadatas") or []
+        ids = data.get("ids") or [str(index) for index in range(len(documents))]
+        _lexical_corpora[db_key] = [
+            {
+                "id": item_id,
+                "document": document,
+                "metadata": metadata,
+                "normalized": _normalize_search_text(
+                    f"{metadata.get('title', '')}\n{document}"
+                ),
+            }
+            for item_id, document, metadata in zip(ids, documents, metadatas)
+        ]
+    return _lexical_corpora[db_key]
+
+
+def _select_diverse_results(ranked, n: int):
+    """Avoid spending the result list on adjacent chunks from one chapter."""
+    selected = []
+    deferred = []
+    chunks_by_chapter = {}
+    for item in ranked:
+        metadata = item["metadata"]
+        chapter = int(metadata["chapter"])
+        chunk = int(metadata["chunk"])
+        existing = chunks_by_chapter.get(chapter, [])
+        if len(existing) >= 2 or any(abs(chunk - other) <= 1 for other in existing):
+            deferred.append(item)
+            continue
+        selected.append(item)
+        chunks_by_chapter.setdefault(chapter, []).append(chunk)
+        if len(selected) == n:
+            return selected
+
+    for item in deferred:
+        selected.append(item)
+        if len(selected) == n:
+            break
+    return selected
+
+
 def split_text(text,size=EMBEDDING_CHUNK_SIZE,overlap=EMBEDDING_CHUNK_OVERLAP):
     step=size-overlap
     return [
@@ -179,43 +260,123 @@ def build_embedding(
     print("embedding完成")
 
 
-def search(query,book_path: BookPaths,n=SEMANTIC_SEARCH_DEFAULT_N,top_k=SEMANTIC_SEARCH_TOP_K):
+def search(
+    query,
+    book_path: BookPaths,
+    max_chapter: int | None,
+    n=SEMANTIC_SEARCH_DEFAULT_N,
+    top_k=SEMANTIC_SEARCH_TOP_K,
+):
     collection = get_collection(book_path)
-    if collection.count() == 0:
+    collection_count = collection.count()
+    if collection_count == 0 or n <= 0 or not query.strip():
         return []
 
     vector=get_model().encode_queries(
         [query]
     )[0]
 
-    result=collection.query(
-        query_embeddings=[
-            vector.tolist()
-        ],
-        n_results=top_k
-    )
+    query_arguments = {
+        "query_embeddings": [vector.tolist()],
+        "n_results": min(top_k, collection_count),
+    }
+    if max_chapter is not None:
+        query_arguments["where"] = {"chapter": {"$lte": max_chapter}}
+    result=collection.query(**query_arguments)
 
     documents=(result.get("documents") or [[]])[0]
     metadatas=(result.get("metadatas") or [[]])[0]
+    raw_result_ids = (result.get("ids") or [[]])[0]
+    result_ids = raw_result_ids or [
+        f"{metadata.get('chapter', 'unknown')}_{metadata.get('chunk', index)}"
+        for index, metadata in enumerate(metadatas)
+    ]
     if not documents or not metadatas:
         return []
 
-    scores=rerank(query, documents)
-
-    ranked=sorted(
-        zip(scores,documents,metadatas),
-        key=lambda x:x[0],
-        reverse=True
-    )
-
-    return [
-        {
-            "score":score,
-            "text":text,
-            "metadata":meta
+    candidates = {}
+    vector_ranks = {}
+    for rank, (item_id, document, metadata) in enumerate(
+        zip(result_ids, documents, metadatas),
+        1,
+    ):
+        candidates[item_id] = {
+            "id": item_id,
+            "document": document,
+            "metadata": metadata,
         }
-        for score,text,meta in ranked[:n]
+        vector_ranks[item_id] = rank
+
+    normalized_query = _normalize_search_text(query)
+    lexical_scored = []
+    for item in _get_lexical_corpus(collection, book_path):
+        chapter = int(item["metadata"]["chapter"])
+        if max_chapter is not None and chapter > max_chapter:
+            continue
+        lexical_scored.append((_lexical_score(normalized_query, item["normalized"]), item))
+    lexical_scored = [pair for pair in lexical_scored if pair[0] > 0]
+    lexical_scored.sort(key=lambda pair: pair[0], reverse=True)
+    lexical_limit = min(max(n * 4, top_k // 2), len(lexical_scored))
+    lexical_ranks = {}
+    lexical_scores = {}
+    for rank, (score, item) in enumerate(lexical_scored[:lexical_limit], 1):
+        candidates.setdefault(item["id"], item)
+        lexical_ranks[item["id"]] = rank
+        lexical_scores[item["id"]] = score
+
+    # Keep cross-encoder work bounded while retaining candidates from both recall paths.
+    pre_ranked = sorted(
+        candidates.values(),
+        key=lambda item: (
+            0.55 / (10 + vector_ranks.get(item["id"], top_k + 10))
+            + 0.45 / (10 + lexical_ranks.get(item["id"], lexical_limit + 10))
+        ),
+        reverse=True,
+    )[:max(top_k, n * 5)]
+
+    reranker_documents = [
+        f"{item['metadata'].get('title', '')}\n{item['document']}"
+        for item in pre_ranked
     ]
+    reranker_scores = rerank(query, reranker_documents)
+    reranker_order = sorted(
+        range(len(pre_ranked)),
+        key=lambda index: reranker_scores[index],
+        reverse=True,
+    )
+    reranker_ranks = {
+        pre_ranked[index]["id"]: rank
+        for rank, index in enumerate(reranker_order, 1)
+    }
+    reranker_scores_by_id = {
+        item["id"]: float(score)
+        for item, score in zip(pre_ranked, reranker_scores)
+    }
+
+    ranked = []
+    for item in pre_ranked:
+        item_id = item["id"]
+        vector_rank = vector_ranks.get(item_id, top_k + 10)
+        lexical_rank = lexical_ranks.get(item_id, lexical_limit + 10)
+        reranker_rank = reranker_ranks[item_id]
+        hybrid_score = 11 * (
+            0.45 / (10 + reranker_rank)
+            + 0.30 / (10 + vector_rank)
+            + 0.25 / (10 + lexical_rank)
+        )
+        ranked.append({
+            "score": hybrid_score,
+            "reranker_score": reranker_scores_by_id[item_id],
+            "lexical_score": lexical_scores.get(item_id, 0.0),
+            "vector_rank": vector_rank if item_id in vector_ranks else None,
+            "lexical_rank": lexical_rank if item_id in lexical_ranks else None,
+            "reranker_rank": reranker_rank,
+            "text": item["document"],
+            "metadata": item["metadata"],
+        })
+
+    ranked.sort(key=lambda item: item["score"], reverse=True)
+    return _select_diverse_results(ranked, n)
 
 
 if __name__=="__main__":
@@ -223,7 +384,7 @@ if __name__=="__main__":
     #reset_db(BookPaths(BOOK_ID))
     #build_embedding(BookPaths(BOOK_ID), BookPaths(BOOK_ID).vector_db_dir)
 
-    for item in search("程斌初次遇见文雯", BookPaths(BOOK_ID)):
+    for item in search("程斌初次遇见文雯", BookPaths(BOOK_ID), None):
         meta=item["metadata"]
         print(
             f"\nscore={item['score']:.4f} chapter={meta['chapter']} chunk={meta['chunk']} title={meta['title']}\n"

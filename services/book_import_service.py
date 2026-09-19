@@ -40,6 +40,7 @@ class BookImportService:
         state = {
             "book_id": book_id,
             "original_name": Path(filename).name,
+            "name": Path(filename).stem,
             "chapter_count": 0,
             "status": "splitting",
             "processed": 0,
@@ -62,14 +63,21 @@ class BookImportService:
                 self._states.pop(book_id, None)
             raise
 
-    def save_info(self, book_id: str, content: str) -> dict[str, Any]:
+    def save_info(self, book_id: str, name: str, content: str) -> dict[str, Any]:
         book_path = self._require_import(book_id)
+        state = self._read_state(book_path)
+        if state["status"] in {"pending", "loading_model", "encoding", "writing"}:
+            raise ValueError("向量化正在运行，不能修改书籍信息")
+        name = name.strip()
+        if not name:
+            raise ValueError("书名不能为空")
         if not content.strip():
             raise ValueError("书籍信息不能为空")
 
+        self._write_text(book_path.name_file, name + "\n")
         self._write_text(book_path.info_file, content.strip() + "\n")
-        state = self._read_state(book_path)
         state.update({
+            "name": name,
             "status": "ready_for_embedding",
             "message": "书籍信息已保存，可以开始向量化",
             "error": None,
@@ -129,6 +137,11 @@ class BookImportService:
     def get_import(self, book_id: str) -> dict[str, Any]:
         state = self.get_status(book_id)
         book_path = BookPaths(book_id)
+        state["name"] = (
+            book_path.name_file.read_text(encoding="utf-8").strip()
+            if book_path.name_file.exists()
+            else state.get("name", "")
+        )
         state["info"] = (
             book_path.info_file.read_text(encoding="utf-8")
             if book_path.info_file.exists()

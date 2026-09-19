@@ -118,6 +118,78 @@ class ChatServiceTests(unittest.TestCase):
         self.assertEqual(conversation.messages[-1].content, "你好，读者")
         self.print_success("普通回答的事件顺序和消息保存正常")
 
+    def test_summary_setting_replaces_prompt_and_tools_for_existing_conversation(self):
+        fake_client = FakeClient([
+            [text_chunk("第一次回答")],
+            [text_chunk("第二次回答")],
+        ])
+
+        def tools_for_setting(enabled):
+            names = ["semantic_search"] + (["get_summary"] if enabled else [])
+            return [{"type": "function", "function": {"name": name}} for name in names]
+
+        with (
+            patch.object(chat_module, "client", fake_client),
+            patch.object(chat_module, "summary_enabled", side_effect=[False, True]),
+            patch.object(
+                chat_module,
+                "get_system_prompt",
+                side_effect=lambda enabled, max_chapter: f"prompt:{enabled}:{max_chapter}",
+            ),
+            patch.object(chat_module, "build_tools", side_effect=tools_for_setting),
+        ):
+            service = chat_module.ChatService()
+            list(service.stream_message(BOOK_ID, "summary-toggle", "第一次"))
+            list(service.stream_message(BOOK_ID, "summary-toggle", "第二次"))
+
+        first_request, second_request = fake_client.chat.completions.calls
+        self.assertEqual(first_request["messages"][0]["content"], "prompt:False:None")
+        self.assertEqual(second_request["messages"][0]["content"], "prompt:True:None")
+        self.assertEqual(
+            [tool["function"]["name"] for tool in first_request["tools"]],
+            ["semantic_search"],
+        )
+        self.assertEqual(
+            [tool["function"]["name"] for tool in second_request["tools"]],
+            ["semantic_search", "get_summary"],
+        )
+        self.print_success("旧对话会在下一次请求同步切换总结提示词和工具")
+
+    def test_spoiler_limit_is_fixed_for_the_whole_request(self):
+        fake_client = FakeClient([
+            [tool_chunk("call-1", "get_chapter", '{"chapter_id":3}'), empty_chunk()],
+            [text_chunk("当前阅读进度不足")],
+        ])
+        received_limits = []
+
+        def get_chapter(chapter_id, context):
+            received_limits.append(context.max_chapter)
+            return {"kind": "error", "message": "防剧透模式已开启"}
+
+        with (
+            patch.object(chat_module, "client", fake_client),
+            patch.object(chat_module, "spoiler_chapter_limit", return_value=2),
+            patch.object(
+                chat_module,
+                "get_system_prompt",
+                side_effect=lambda enabled, max_chapter: f"limit:{max_chapter}",
+            ),
+            patch.object(
+                chat_module,
+                "build_tools",
+                return_value=[{"type": "function", "function": {"name": "get_chapter"}}],
+            ),
+            patch.object(chat_module, "AVAILABLE_TOOLS", {"get_chapter": get_chapter}),
+        ):
+            service = chat_module.ChatService()
+            events = list(service.stream_message(BOOK_ID, "spoiler", "第三章发生了什么"))
+
+        self.assertEqual(received_limits, [2])
+        self.assertEqual(fake_client.chat.completions.calls[0]["messages"][0]["content"], "limit:2")
+        tool_result = next(event for event in events if event.event == "tool_result")
+        self.assertTrue(tool_result.data["error"])
+        self.print_success("同一条回答的提示词和所有工具共用同一个防剧透上限")
+
     def test_provider_error_does_not_emit_done(self):
         fake_client = FakeClient([RuntimeError("connection lost")])
 
@@ -134,8 +206,8 @@ class ChatServiceTests(unittest.TestCase):
     def test_conversations_stay_bound_to_their_book(self):
         service = chat_module.ChatService()
         with patch.object(service, "_create_initial_messages", return_value=[]):
-            service.create_conversation("book-1", "conversation-1", "书一会话")
-            service.create_conversation("book-2", "conversation-2", "书二会话")
+            service.create_conversation("book-1", "conversation-1", "书一会话", False)
+            service.create_conversation("book-2", "conversation-2", "书二会话", False)
 
         self.assertEqual(
             [conversation.id for conversation in service.get_conversations("book-1")],
@@ -183,7 +255,7 @@ class ChatServiceTests(unittest.TestCase):
         with patch.object(
             chat_module,
             "AVAILABLE_TOOLS",
-            {"get_chapter_list": lambda book_path: {
+            {"get_chapter_list": lambda context: {
                 "kind": "chapter_list",
                 "chapters": [{"chapter_id": 1, "title": "第一章"}],
             }},

@@ -12,7 +12,8 @@ import type { BookImportStatus } from "./types";
 type BookImporterProps = {
   initialBookId?: string;
   onClose: () => void;
-  onImportCreated: (bookId: string) => void;
+  onImportCreated: (bookId: string, name: string) => void;
+  onInfoSaved: (bookId: string, name: string) => void;
   onImported: (bookId: string) => Promise<void>;
   onDiscarded: (bookId: string) => Promise<void>;
 };
@@ -28,15 +29,19 @@ const wait = (milliseconds: number) => new Promise((resolve) => {
   window.setTimeout(resolve, milliseconds);
 });
 
-function defaultInfo(filename: string): string {
-  const title = filename.replace(/\.txt$/i, "");
-  return `书名：${title}\n作者：\n类型：\n主要人物：\n背景：\n其他说明：`;
+function defaultName(filename: string): string {
+  return filename.replace(/\.txt$/i, "");
+}
+
+function defaultInfo(): string {
+  return "作者：\n类型：\n主要人物：\n简介：";
 }
 
 export default function BookImporter({
   initialBookId,
   onClose,
   onImportCreated,
+  onInfoSaved,
   onImported,
   onDiscarded,
 }: BookImporterProps) {
@@ -46,6 +51,7 @@ export default function BookImporter({
   const [file, setFile] = useState<File | null>(null);
   const [bookId, setBookId] = useState<string | null>(initialBookId ?? null);
   const [chapterCount, setChapterCount] = useState(0);
+  const [name, setName] = useState("");
   const [info, setInfo] = useState("");
   const [status, setStatus] = useState<BookImportStatus | null>(null);
   const [busy, setBusy] = useState(Boolean(initialBookId));
@@ -71,7 +77,8 @@ export default function BookImporter({
       if (!mounted.current) return;
       setBookId(resumeBookId);
       setChapterCount(current.chapter_count ?? 0);
-      setInfo(current.info || defaultInfo(current.original_name ?? resumeBookId));
+      setName(current.name || defaultName(current.original_name ?? resumeBookId));
+      setInfo(current.info || defaultInfo());
 
       if (current.status === "completed") {
         await onImported(resumeBookId);
@@ -141,9 +148,11 @@ export default function BookImporter({
       const result = await importBook(file);
       setBookId(result.book_id);
       setChapterCount(result.chapter_count ?? 0);
-      setInfo(defaultInfo(file.name));
+      const importedName = result.name || defaultName(file.name);
+      setName(importedName);
+      setInfo(defaultInfo());
       setStep("info");
-      onImportCreated(result.book_id);
+      onImportCreated(result.book_id, importedName);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "导入小说失败");
     } finally {
@@ -152,11 +161,12 @@ export default function BookImporter({
   };
 
   const submitInfo = async () => {
-    if (!bookId || !info.trim() || busy) return;
+    if (!bookId || !name.trim() || !info.trim() || busy) return;
     setBusy(true);
     setError("");
     try {
-      await saveBookInfo(bookId, info);
+      const result = await saveBookInfo(bookId, name.trim(), info);
+      onInfoSaved(bookId, result.name ?? name.trim());
       setStep("embedding");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "保存书籍信息失败");
@@ -210,7 +220,6 @@ export default function BookImporter({
       <section className="import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-title">
         <div className="import-header">
           <div>
-            <div className="import-eyebrow">添加小说</div>
             <h2 id="import-title">{initialBookId ? "继续导入书籍" : "导入书籍"}</h2>
           </div>
           <button
@@ -242,7 +251,6 @@ export default function BookImporter({
                 onChange={(event) => setFile(event.target.files?.[0] ?? null)}
               />
             </label>
-            <p className="import-note">文件会自动保存为 novel.txt，并生成纯英文 book_id。</p>
             <button className="import-primary" type="button" disabled={!file || busy} onClick={() => void upload()}>
               {busy ? "正在上传并切章…" : "上传并切分章节"}
             </button>
@@ -253,11 +261,15 @@ export default function BookImporter({
           <div className="import-body">
             <div className="import-result">已识别 {chapterCount} 章</div>
             <label className="info-editor">
-              <span>info.txt</span>
+              <span>书名</span>
+              <input value={name} disabled={busy} onChange={(event) => setName(event.target.value)} />
+            </label>
+            <label className="info-editor">
+              <span>概况</span>
               <textarea value={info} rows={10} disabled={busy} onChange={(event) => setInfo(event.target.value)} />
             </label>
-            <button className="import-primary" type="button" disabled={!info.trim() || busy} onClick={() => void submitInfo()}>
-              {busy ? "正在保存…" : "保存并进入向量化"}
+            <button className="import-primary" type="button" disabled={!name.trim() || !info.trim() || busy} onClick={() => void submitInfo()}>
+              {busy ? "正在保存…" : "下一步"}
             </button>
           </div>
         )}
@@ -277,7 +289,7 @@ export default function BookImporter({
                 </div>
               </>
             ) : (
-              <p className="import-note">任务会在后台运行。开始后可以继续阅读，需要时从书籍菜单查看进度。</p>
+              <p className="import-note">任务会在后台运行，可随时从书籍菜单查看进度。</p>
             )}
             {!embeddingRunning && status?.status !== "completed" && (
               <button className="import-primary" type="button" disabled={busy} onClick={() => void runEmbedding()}>

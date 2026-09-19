@@ -5,7 +5,10 @@ import {
   appendUserItem,
 } from "./chatTimeline";
 import BookImporter from "./BookImporter";
+import SummaryManager from "./SummaryManager";
+import SpoilerControls from "./SpoilerControls";
 import {
+  bookDisplayName,
   makeConversation,
   makeWorkspace,
   updateConversationInWorkspace,
@@ -15,9 +18,10 @@ import type {
   BookWorkspace,
   ChatEvent,
   RunningRequest,
+  ToolResult,
 } from "./types";
 
-const toolDisplayName = (name: string, args: unknown) => {
+const toolDisplayName = (name: string, args: unknown, result?: ToolResult) => {
   const argumentsObject = args && typeof args === "object"
     ? args as Record<string, unknown>
     : {};
@@ -33,24 +37,32 @@ const toolDisplayName = (name: string, args: unknown) => {
   }
   if (name === "semantic_search" && query !== undefined) return `模糊搜索：${query}`;
   if (name === "get_summary") {
-    const levelNames: Record<string, string> = { mid: "中段", big: "大段", whole: "全书" };
-    const level = typeof argumentsObject.level === "string"
-      ? levelNames[argumentsObject.level] ?? argumentsObject.level
-      : "剧情";
-    return argumentsObject.start !== undefined
-      ? `读取${level}总结（第 ${argumentsObject.start} 章起）`
-      : `读取${level}总结`;
+    const level = argumentsObject.level;
+    if (level === "whole") return "查看全书总结";
+
+    const start = typeof argumentsObject.start === "number" ? argumentsObject.start : null;
+    const returnedEnd = result?.data.kind === "summary" && typeof result.data.end === "number"
+      ? result.data.end
+      : null;
+    const blockSize = level === "mid" ? 20 : level === "big" ? 100 : null;
+    if (start !== null && blockSize !== null) {
+      const end = returnedEnd ?? start + blockSize - 1;
+      return `查看第 ${start}-${end} 章总结`;
+    }
+    return "查看剧情总结";
   }
   return name === "" ? "执行工具" : name;
 };
 
 function App() {
   const [books, setBooks] = useState<string[]>([]);
+  const [bookNames, setBookNames] = useState<Record<string, string>>({});
   const [importingBookIds, setImportingBookIds] = useState<string[]>([]);
   const [workspace, setWorkspace] = useState<BookWorkspace | null>(null);
   const [runningRequests, setRunningRequests] = useState<RunningRequest[]>([]);
   const [switchingBook, setSwitchingBook] = useState(false);
   const [bookImporterTarget, setBookImporterTarget] = useState<BookImporterTarget | null>(null);
+  const [summaryManagerBookId, setSummaryManagerBookId] = useState<string | null>(null);
   const [appError, setAppError] = useState("");
 
   useEffect(() => {
@@ -65,6 +77,7 @@ function App() {
       .then(({ selection, savedConversations }) => {
         if (cancelled) return;
         setBooks(selection.books);
+        setBookNames(selection.book_names ?? {});
         setImportingBookIds(selection.importing_book_ids);
         setWorkspace(selection.selected_book_id
           ? makeWorkspace(selection.selected_book_id, savedConversations)
@@ -179,23 +192,30 @@ function App() {
   const finishBookImport = async (importedBookId: string) => {
     const selection = await loadBookSelection();
     setBooks(selection.books);
+    setBookNames(selection.book_names ?? {});
     setImportingBookIds(selection.importing_book_ids);
     await switchBook(importedBookId);
     setBookImporterTarget(null);
   };
 
-  const registerBookImport = (importedBookId: string) => {
+  const registerBookImport = (importedBookId: string, name: string) => {
     setBooks((previous) => previous.includes(importedBookId)
       ? previous
       : [...previous, importedBookId].sort());
     setImportingBookIds((previous) => previous.includes(importedBookId)
       ? previous
       : [...previous, importedBookId].sort());
+    setBookNames((previous) => ({ ...previous, [importedBookId]: name }));
+  };
+
+  const updateBookName = (targetBookId: string, name: string) => {
+    setBookNames((previous) => ({ ...previous, [targetBookId]: name }));
   };
 
   const finishDiscardBookImport = async () => {
     const selection = await loadBookSelection();
     setBooks(selection.books);
+    setBookNames(selection.book_names ?? {});
     setImportingBookIds(selection.importing_book_ids);
     setBookImporterTarget(null);
   };
@@ -367,22 +387,40 @@ function App() {
 
       <main className="main">
         <header className="topbar">
-          <label className="book-selector">
-            <span>当前书籍</span>
-            <select
-              aria-label="切换书籍"
-              value={bookId ?? ""}
-              disabled={books.length === 0 || hasRunningRequests || switchingBook}
-              onChange={(event) => selectBook(event.target.value)}
+          <div className="topbar-book-controls">
+            <label className="book-selector">
+              <span>当前书籍</span>
+              <select
+                aria-label="切换书籍"
+                value={bookId ?? ""}
+                disabled={books.length === 0 || hasRunningRequests || switchingBook}
+                onChange={(event) => selectBook(event.target.value)}
+              >
+                {!bookId && <option value="" disabled>选择书籍</option>}
+                {books.map((book) => (
+                  <option key={book} value={book}>
+                    {bookDisplayName(book, bookNames)}{importingBookIds.includes(book) ? "（未完成）" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="summary-open"
+              type="button"
+              disabled={!bookId || switchingBook }
+              onClick={() => bookId && setSummaryManagerBookId(bookId)}
             >
-              {!bookId && <option value="" disabled>选择书籍</option>}
-              {books.map((book) => (
-                <option key={book} value={book}>
-                  {book}{importingBookIds.includes(book) ? "（未完成）" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+              总结管理
+            </button>
+
+            {bookId && (
+              <SpoilerControls
+                key={bookId}
+                bookId={bookId}
+                disabled={switchingBook}
+              />
+            )}
+          </div>
           <div className="topbar-status">
             <span />
             {switchingBook ? "正在切换" : "本地模式"}
@@ -404,7 +442,9 @@ function App() {
                     {item.type === "tool" && (
                       <details className={`tool-card ${item.tool.status}`}>
                         <summary>
-                          <span className="tool-card-title">{toolDisplayName(item.tool.name, item.tool.arguments)}</span>
+                          <span className="tool-card-title">
+                            {toolDisplayName(item.tool.name, item.tool.arguments, item.tool.result)}
+                          </span>
                         </summary>
                         <div className="tool-card-body">
                           {item.tool.result !== undefined && (
@@ -462,8 +502,17 @@ function App() {
           initialBookId={bookImporterTarget.bookId}
           onClose={() => setBookImporterTarget(null)}
           onImportCreated={registerBookImport}
+          onInfoSaved={updateBookName}
           onImported={finishBookImport}
           onDiscarded={finishDiscardBookImport}
+        />
+      )}
+      {summaryManagerBookId && (
+        <SummaryManager
+          key={summaryManagerBookId}
+          bookId={summaryManagerBookId}
+          bookName={bookDisplayName(summaryManagerBookId, bookNames)}
+          onClose={() => setSummaryManagerBookId(null)}
         />
       )}
     </div>

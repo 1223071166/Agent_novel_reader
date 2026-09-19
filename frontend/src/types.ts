@@ -35,12 +35,14 @@ export type Conversation = {
 
 export type BookSelection = {
   books: string[];
+  book_names?: Record<string, string>;
   importing_book_ids: string[];
   selected_book_id: string | null;
 };
 
 export type BookImportStatus = {
   book_id: string;
+  name?: string;
   original_name?: string;
   chapter_count?: number;
   status: "splitting" | "awaiting_info" | "ready_for_embedding" | "pending" | "loading_model" | "encoding" | "writing" | "completed" | "failed";
@@ -49,6 +51,53 @@ export type BookImportStatus = {
   message: string;
   error: string | null;
   info?: string;
+};
+
+export type SummaryLevel = "mid" | "big" | "whole";
+
+export type SummaryTarget = {
+  level: SummaryLevel;
+  start: number | null;
+};
+
+export type SummaryArtifact = SummaryTarget & {
+  end: number;
+  exists: boolean;
+};
+
+export type SummaryPlan = {
+  targets: SummaryTarget[];
+  total_calls: number;
+  estimated_input_tokens: number;
+  estimated_output_tokens: number;
+  estimated_tokens: number;
+};
+
+export type SummaryJob = {
+  status: "pending" | "running" | "completed" | "failed";
+  targets: SummaryTarget[];
+  completed_calls: number;
+  total_calls: number;
+  estimated_input_tokens: number;
+  estimated_output_tokens: number;
+  estimated_tokens: number;
+  current: string;
+  error: string | null;
+};
+
+export type SummaryOverview = {
+  book_id: string;
+  enabled: boolean;
+  chapter_count: number;
+  summaries: SummaryArtifact[];
+  job: SummaryJob | null;
+};
+
+export type ReadingSettings = {
+  book_id: string;
+  chapter_count: number;
+  spoiler_mode: boolean;
+  read_through_chapter: number;
 };
 
 // 前端运行期间使用的状态类型

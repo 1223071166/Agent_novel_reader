@@ -5,6 +5,13 @@ import type {
   FrontendConversation,
 } from "./types";
 
+export function bookDisplayName(
+  bookId: string,
+  bookNames?: Record<string, string>,
+): string {
+  return bookNames?.[bookId] ?? bookId;
+}
+
 export const makeConversation = (): FrontendConversation => ({
   id: crypto.randomUUID(),
   title: "新对话",

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bookDisplayName,
   makeWorkspace,
   updateConversationInWorkspace,
 } from "../workspaceState";
@@ -27,6 +28,11 @@ const workspace: BookWorkspace = {
 };
 
 describe("book workspace state", () => {
+  it("uses the book id when an older API response has no display names", () => {
+    expect(bookDisplayName("book-1", undefined)).toBe("book-1");
+    expect(bookDisplayName("book-1", { "book-1": "第一本书" })).toBe("第一本书");
+  });
+
   it("updates only the requested conversation", () => {
     const updated = updateConversationInWorkspace(
       workspace,

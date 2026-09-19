@@ -7,9 +7,11 @@ import uuid
 import copy
 from typing import Any, Iterator
 
-from config import MODEL, SHOW_USAGE, USE_SUMMARY_TOOL, MESSAGE_STORAGE_FILE, client, BookPaths
-from novel_tools import AVAILABLE_TOOLS, build_tools, load_titles
+from config import MODEL, SHOW_USAGE, MESSAGE_STORAGE_FILE, client, BookPaths
+from novel_tools import AVAILABLE_TOOLS, NovelToolContext, build_tools, load_titles
 from prompts import get_system_prompt
+from services.reading_service import spoiler_chapter_limit
+from services.summary_service import summary_enabled
 from usage_stats import get_field, read_usage
 from services.conversation_store import ConversationStore
 from services.models import ChatEvent, Conversation, Message
@@ -35,7 +37,6 @@ def conversation_title(user_content: str) -> str:
 class ChatService:
     def __init__(self) -> None:
         self._store = ConversationStore(MESSAGE_STORAGE_FILE)
-        self._tools = build_tools(USE_SUMMARY_TOOL)
         self._available_tools = AVAILABLE_TOOLS
 
         self._conversations: dict[str, Conversation] = self._store.load_all_conversations()
@@ -49,7 +50,17 @@ class ChatService:
         }
         self._conversations_lock = threading.Lock()
 
-    def create_conversation(self, book_id: str, conversation_id: str, title: str) -> str:
+    def tools_for_book(self, book_id: str) -> list[dict[str, Any]]:
+        return build_tools(summary_enabled(book_id))
+
+    def create_conversation(
+        self,
+        book_id: str,
+        conversation_id: str,
+        title: str,
+        use_summary_tool: bool,
+        max_chapter: int | None = None,
+    ) -> str:
         with self._conversations_lock:
             existing = self._conversations.get(conversation_id)
             if existing is not None:
@@ -58,7 +69,7 @@ class ChatService:
                 return existing.title
 
             book_path = BookPaths(book_id)
-            messages = self._create_initial_messages(book_path)
+            messages = self._create_initial_messages(book_path, use_summary_tool, max_chapter)
             self._store.create_conversation(conversation_id, book_id, title)
             self._conversations[conversation_id] = Conversation(
                 id=conversation_id,
@@ -101,10 +112,14 @@ class ChatService:
         user_content: str,
     ) -> Iterator[ChatEvent]:
         try:
+            use_summary_tool = summary_enabled(book_id)
+            max_chapter = spoiler_chapter_limit(book_id)
             title = self.create_conversation(
                 book_id,
                 conversation_id,
                 conversation_title(user_content),
+                use_summary_tool,
+                max_chapter,
             )
         except ValueError as exc:
             yield ChatEvent("error", {
@@ -143,7 +158,13 @@ class ChatService:
             })
 
             has_error = False
-            for event in self._run_model(book_path, conversation_id, cancel_event):
+            for event in self._run_model(
+                book_path,
+                conversation_id,
+                cancel_event,
+                use_summary_tool,
+                max_chapter,
+            ):
                 yield event
                 has_error = has_error or event.event == "error"
 
@@ -156,7 +177,20 @@ class ChatService:
             self._cancel_events.pop(conversation_id, None)
             lock.release()
 
-    def _run_model(self, book_path: BookPaths, conversation_id: str,cancel_event:threading.Event) -> Iterator[ChatEvent]:
+    def _run_model(
+        self,
+        book_path: BookPaths,
+        conversation_id: str,
+        cancel_event: threading.Event,
+        use_summary_tool: bool,
+        max_chapter: int | None,
+    ) -> Iterator[ChatEvent]:
+        tool_context = NovelToolContext(book_path, max_chapter)
+        tools = build_tools(use_summary_tool)
+        allowed_tool_names = {
+            tool["function"]["name"]
+            for tool in tools
+        }
         for round_index in range(1, MAX_TOOL_ROUNDS + 1):
             if cancel_event.is_set():
                 yield ChatEvent("error", {
@@ -166,8 +200,12 @@ class ChatService:
                 return
             request_args: dict[str, Any] = {
                 "model": MODEL,
-                "messages": self._messages_for_request(conversation_id),
-                "tools": self._tools,
+                "messages": self._messages_for_request(
+                    conversation_id,
+                    use_summary_tool,
+                    max_chapter,
+                ),
+                "tools": tools,
                 "stream": True,
             }
             if SHOW_USAGE:
@@ -254,7 +292,13 @@ class ChatService:
                 return
 
             for tool_call in tool_calls:
-                yield from self._execute_tool(book_path, conversation_id, tool_call, round_index)
+                yield from self._execute_tool(
+                    conversation_id,
+                    tool_call,
+                    round_index,
+                    allowed_tool_names,
+                    tool_context,
+                )
 
         yield ChatEvent("error", {
             "code": "tool_round_limit",
@@ -263,10 +307,11 @@ class ChatService:
 
     def _execute_tool(
         self,
-        book_path: BookPaths,
         conversation_id: str,
         tool_call: dict[str, Any],
         round_index: int,
+        allowed_tool_names: set[str],
+        tool_context: NovelToolContext,
     ) -> Iterator[ChatEvent]:
         call_id = tool_call.get("id", "")
         function = tool_call.get("function", {})
@@ -277,7 +322,7 @@ class ChatService:
             arguments = json.loads(raw_arguments)
             if not isinstance(arguments, dict):
                 raise ValueError("Tool arguments must be a JSON object.")
-            if name not in self._available_tools:
+            if name not in allowed_tool_names or name not in self._available_tools:
                 raise ValueError(f"Unknown tool: {name}")
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             result_data = error_result(str(exc))
@@ -301,7 +346,7 @@ class ChatService:
         })
         try:
             result_data = self._available_tools[name](
-                book_path=book_path,
+                context=tool_context,
                 **arguments,
             )
             if not isinstance(result_data, dict):
@@ -339,10 +384,24 @@ class ChatService:
             self._conversations[conversation_id].messages.append(message)
             self._store.save_message(conversation_id, message)
 
-    def _messages_for_request(self, conversation_id: str) -> list[dict[str, Any]]:
+    def _messages_for_request(
+        self,
+        conversation_id: str,
+        use_summary_tool: bool,
+        max_chapter: int | None,
+    ) -> list[dict[str, Any]]:
         with self._conversations_lock:
             messages = self._conversations[conversation_id].messages
-            return [self._message_for_request(message) for message in messages]
+            request_messages = [self._message_for_request(message) for message in messages]
+
+        current_prompt = get_system_prompt(use_summary_tool, max_chapter)
+        for message in request_messages:
+            if message["role"] == "system":
+                message["content"] = current_prompt
+                break
+        else: #如果没有break
+            request_messages.insert(0, {"role": "system", "content": current_prompt})
+        return request_messages
 
     @staticmethod
     def _message_for_request(message: Message) -> dict[str, Any]:
@@ -360,19 +419,29 @@ class ChatService:
             request_message["tool_call_id"] = message.tool_call_id
         return request_message
 
-    def _create_initial_messages(self, book_path: BookPaths) -> list[Message]:
+    def _create_initial_messages(
+        self,
+        book_path: BookPaths,
+        use_summary_tool: bool = False,
+        max_chapter: int | None = None,
+    ) -> list[Message]:
+        book_name = (
+            book_path.name_file.read_text(encoding="utf-8").strip()
+            if book_path.name_file.exists()
+            else book_path.book_id
+        )
         with open(book_path.info_file, "r", encoding="utf-8") as file:
             info_text = file.read()
         return [
             Message(
                 id=str(uuid.uuid4()),
                 role="system",
-                content=get_system_prompt(USE_SUMMARY_TOOL),
+                content=get_system_prompt(use_summary_tool, max_chapter),
             ),
             Message(
                 id=str(uuid.uuid4()),
                 role="system",
-                content="这是小说的基本信息：" + info_text,
+                content=f"这是小说的基本信息：\n书名：{book_name}\n{info_text}",
             ),
         ]
 

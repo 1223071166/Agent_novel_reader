@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from summaries import (
+    _combine,
     _chapter_summary_path,
     _read_summary,
     _summarize,
@@ -14,6 +15,8 @@ from summaries import (
     block_range,
     get_summary,
     is_block_start,
+    normalize_summary_targets,
+    plan_summary_targets,
     total_chapters,
 )
 
@@ -44,6 +47,10 @@ def fake_client(responses):
 
 
 class SummaryPathsTests(unittest.TestCase):
+    def test_empty_parts_are_not_sent_to_the_model(self):
+        with self.assertRaisesRegex(ValueError, "没有可用于生成总结的内容"):
+            _combine("system", [])
+
     def test_summary_reads_only_the_requested_book(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -125,6 +132,61 @@ class SummaryPathsTests(unittest.TestCase):
         (chapter_dir / "1.txt").write_text("正文", encoding="utf-8")
         (summary_dir / "whole.txt").write_text(summary, encoding="utf-8")
         return SimpleNamespace(chapter_dir=chapter_dir, summary_dir=summary_dir)
+
+
+class SummaryPlanningTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        root = Path(self.temporary_directory.name)
+        self.book = SimpleNamespace(
+            chapter_dir=root / "chapters",
+            summary_dir=root / "summaries",
+        )
+        self.book.chapter_dir.mkdir()
+        for chapter_id in range(1, 46):
+            (self.book.chapter_dir / f"{chapter_id}.txt").write_text(
+                f"第 {chapter_id} 章正文" * 10,
+                encoding="utf-8",
+            )
+
+    def test_big_plan_expands_missing_chapters_and_mid_summaries(self):
+        plan = plan_summary_targets(
+            [{"level": "big", "start": 1}],
+            self.book,
+        )
+
+        self.assertEqual(plan["total_calls"], 49)
+        self.assertGreater(plan["estimated_tokens"], 0)
+
+    def test_boolean_is_not_accepted_as_a_summary_start(self):
+        with self.assertRaisesRegex(ValueError, "需要提供起始章号"):
+            normalize_summary_targets(
+                [{"level": "mid", "start": True}],
+                self.book,
+            )
+
+    def test_existing_mid_is_reused_and_overlapping_targets_are_deduplicated(self):
+        self.book.summary_dir.mkdir()
+        (self.book.summary_dir / "mid_1-20.txt").write_text("已有总结", encoding="utf-8")
+
+        plan = plan_summary_targets(
+            [
+                {"level": "big", "start": 1},
+                {"level": "whole", "start": None},
+                {"level": "big", "start": 1},
+            ],
+            self.book,
+        )
+
+        self.assertEqual(plan["total_calls"], 29)
+        self.assertEqual(plan["targets"], [
+            {"level": "big", "start": 1},
+            {"level": "whole", "start": None},
+        ])
+        self.assertGreater(plan["estimated_input_tokens"], 0)
+        self.assertGreater(plan["estimated_output_tokens"], 0)
+        self.assertGreater(plan["estimated_tokens"], 0)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ def chat():
         if user_input.lower() in ["exit","quit",'/exit','/quit']:
             break
         if user_input.startswith("/help"):
-            show_help(service._tools)
+            show_help(service.tools_for_book(BOOK_ID))
             continue
         if user_input.startswith("/tool"):
             execute_user_tool(user_input,service._available_tools)

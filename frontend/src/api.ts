@@ -3,6 +3,11 @@ import type {
   BookSelection,
   ChatEvent,
   Conversation,
+  ReadingSettings,
+  SummaryJob,
+  SummaryOverview,
+  SummaryPlan,
+  SummaryTarget,
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -32,6 +37,92 @@ export async function saveBookSelection(bookId: string): Promise<void> {
   if (!response.ok) throw await responseError(response, "保存当前书籍失败");
 }
 
+
+export async function loadReadingSettings(bookId: string): Promise<ReadingSettings> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/books/${encodeURIComponent(bookId)}/reading-settings`,
+  );
+  if (!response.ok) throw await responseError(response, "加载防剧透设置失败");
+  return await response.json() as ReadingSettings;
+}
+
+export async function saveReadingSettings(
+  bookId: string,
+  spoilerMode: boolean,
+  readThroughChapter: number,
+): Promise<ReadingSettings> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/books/${encodeURIComponent(bookId)}/reading-settings`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        spoiler_mode: spoilerMode,
+        read_through_chapter: readThroughChapter,
+      }),
+    },
+  );
+  if (!response.ok) throw await responseError(response, "保存防剧透设置失败");
+  return await response.json() as ReadingSettings;
+}
+
+
+export async function loadSummaryOverview(bookId: string): Promise<SummaryOverview> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/books/${encodeURIComponent(bookId)}/summaries`,
+  );
+  if (!response.ok) throw await responseError(response, "加载总结状态失败");
+  return await response.json() as SummaryOverview;
+}
+
+export async function saveSummaryEnabled(
+  bookId: string,
+  enabled: boolean,
+): Promise<SummaryOverview> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/books/${encodeURIComponent(bookId)}/summary-settings`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    },
+  );
+  if (!response.ok) throw await responseError(response, "保存总结检索设置失败");
+  return await response.json() as SummaryOverview;
+}
+
+export async function planSummaries(
+  bookId: string,
+  targets: SummaryTarget[],
+): Promise<SummaryPlan> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/books/${encodeURIComponent(bookId)}/summaries/plan`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targets }),
+    },
+  );
+  if (!response.ok) throw await responseError(response, "估算总结消耗失败");
+  return await response.json() as SummaryPlan;
+}
+
+export async function startSummaryJob(
+  bookId: string,
+  targets: SummaryTarget[],
+): Promise<SummaryJob> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/books/${encodeURIComponent(bookId)}/summary-jobs`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targets }),
+    },
+  );
+  if (!response.ok) throw await responseError(response, "启动总结任务失败");
+  return await response.json() as SummaryJob;
+}
+
 export async function importBook(file: File): Promise<BookImportStatus> {
   const response = await fetch(`${API_BASE_URL}/api/book-imports`, {
     method: "POST",
@@ -45,13 +136,17 @@ export async function importBook(file: File): Promise<BookImportStatus> {
   return await response.json() as BookImportStatus;
 }
 
-export async function saveBookInfo(bookId: string, content: string): Promise<BookImportStatus> {
+export async function saveBookInfo(
+  bookId: string,
+  name: string,
+  content: string,
+): Promise<BookImportStatus> {
   const response = await fetch(
     `${API_BASE_URL}/api/book-imports/${encodeURIComponent(bookId)}/info`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ name, content }),
     },
   );
   if (!response.ok) throw await responseError(response, "保存书籍信息失败");

@@ -63,5 +63,20 @@ SYSTEM_PROMPT_NO_SUMMARY = """
 - 如果无法从小说内容确认答案，直接说明无法确认。
 """
 
-def get_system_prompt(use_summary_tool: bool) -> str:
-    return SYSTEM_PROMPT_WITH_SUMMARY if use_summary_tool else SYSTEM_PROMPT_NO_SUMMARY
+def get_system_prompt(use_summary_tool: bool, max_chapter: int | None) -> str:
+    prompt = SYSTEM_PROMPT_WITH_SUMMARY if use_summary_tool else SYSTEM_PROMPT_NO_SUMMARY
+    if max_chapter is None:
+        return prompt
+    if max_chapter == 0:
+        return prompt + """
+
+防剧透模式已开启。用户尚未开始阅读。
+不得使用小说正文、章节标题或剧情总结回答剧情问题，也不得推测后续情节。
+应说明当前阅读进度不足。
+"""
+    return prompt + f"""
+
+防剧透模式已开启。用户目前阅读到第 {max_chapter} 章。
+只能根据第 1 至 {max_chapter} 章的内容回答，不得推测或透露后续情节。
+如果用户询问后续内容，应说明当前阅读进度不足。
+"""

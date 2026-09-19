@@ -31,6 +31,9 @@ class BookPaths:
     def info_file(self) -> Path:
         return self.root / "info.txt"
     @property
+    def name_file(self) -> Path:
+        return self.root / "name.txt"
+    @property
     def chapter_dir(self) -> Path:
         return self.root / "chapters"
     @property
@@ -39,6 +42,12 @@ class BookPaths:
     @property
     def summary_dir(self) -> Path:
         return self.root / "summaries"
+    @property
+    def summary_state_file(self) -> Path:
+        return self.root / "summary_state.json"
+    @property
+    def reading_state_file(self) -> Path:
+        return self.root / "reading_state.json"
     @property
     def vector_db_dir(self) -> Path:
         return DATABASE_DIR / "vector_db" / self.book_id
@@ -77,5 +86,4 @@ BIG_SUMMARY_CHARS = 1000
 WHOLE_SUMMARY_CHARS = 4000
 
 # Main program switches.
-USE_SUMMARY_TOOL = True
 SHOW_USAGE = True

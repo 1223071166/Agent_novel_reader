@@ -47,12 +47,17 @@ class BookImportServiceTests(unittest.TestCase):
                 self.assertTrue((book_root / IMPORT_STATE_FILE).exists())
                 self.assertEqual(service.get_import(book_id)["status"], "awaiting_info")
 
-                service.save_info(book_id, "书名：测试小说")
+                service.save_info(book_id, "测试小说", "这是一本测试小说")
+                self.assertEqual(
+                    (book_root / "name.txt").read_text(encoding="utf-8"),
+                    "测试小说\n",
+                )
                 self.assertEqual(
                     (book_root / "info.txt").read_text(encoding="utf-8"),
-                    "书名：测试小说\n",
+                    "这是一本测试小说\n",
                 )
-                self.assertEqual(service.get_import(book_id)["info"], "书名：测试小说\n")
+                self.assertEqual(service.get_import(book_id)["name"], "测试小说")
+                self.assertEqual(service.get_import(book_id)["info"], "这是一本测试小说\n")
 
                 service.start_embedding(book_id)
                 deadline = time.monotonic() + 2
@@ -113,6 +118,42 @@ class BookImportServiceTests(unittest.TestCase):
             self.assertIn("后端重启", recovered["error"])
             self.assertTrue(marker.exists())
             self.assertFalse(building_dir.exists())
+
+    def test_running_embedding_rejects_info_changes_without_touching_build_files(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            books_dir = root / "books"
+            database_dir = root / "database"
+            book_id = "book_123456789abc"
+            book_root = books_dir / book_id
+            book_root.mkdir(parents=True)
+            (book_root / "name.txt").write_text("原书名\n", encoding="utf-8")
+            (book_root / "info.txt").write_text("原概况\n", encoding="utf-8")
+            (book_root / IMPORT_STATE_FILE).write_text(json.dumps({
+                "book_id": book_id,
+                "status": "encoding",
+                "processed": 12,
+                "total": 100,
+                "message": "正在生成文本向量",
+                "error": None,
+            }), encoding="utf-8")
+            building_dir = database_dir / "vector_db" / f".building-{book_id}-test"
+            building_dir.mkdir(parents=True)
+
+            with (
+                patch.object(config, "BOOKS_DIR", books_dir),
+                patch.object(config, "DATABASE_DIR", database_dir),
+                patch.object(import_module, "BOOKS_DIR", books_dir),
+                patch.object(import_module, "DATABASE_DIR", database_dir),
+                patch.object(BookImportService, "_recover_interrupted_imports"),
+            ):
+                service = BookImportService()
+                with self.assertRaisesRegex(ValueError, "向量化正在运行"):
+                    service.save_info(book_id, "新书名", "新概况")
+
+            self.assertEqual((book_root / "name.txt").read_text(encoding="utf-8"), "原书名\n")
+            self.assertEqual((book_root / "info.txt").read_text(encoding="utf-8"), "原概况\n")
+            self.assertTrue(building_dir.exists())
 
 
 if __name__ == "__main__":

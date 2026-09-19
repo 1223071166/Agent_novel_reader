@@ -6,15 +6,18 @@ from urllib.parse import unquote
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool, StrictInt
 
 from services.chat_service import ChatService
 from services.book_import_service import BookImportService, IMPORT_STATE_FILE
+from services.summary_service import SummaryService
+from services.reading_service import get_reading_settings, save_reading_settings
 from services.models import ChatEvent, Conversation
-from config import BOOKS_DIR, SELECTED_BOOK_FILE
+from config import BOOKS_DIR, SELECTED_BOOK_FILE, BookPaths
 from tool_results import load_tool_result_data, make_tool_result
 #部署方法： uvicorn backend.main:app --reload
 app = FastAPI()
+summary_service = SummaryService()
 chat_service = ChatService()
 book_import_service = BookImportService()
 
@@ -41,11 +44,37 @@ class CancelRequest(BaseModel):
 
 
 class BookInfoRequest(BaseModel):
+    name: str
     content: str
 
 
 class BookSelectionRequest(BaseModel):
     book_id: str
+
+
+class SummarySettingsRequest(BaseModel):
+    enabled: StrictBool
+
+
+class ReadingSettingsRequest(BaseModel):
+    spoiler_mode: StrictBool
+    read_through_chapter: StrictInt
+
+
+class SummaryTargetRequest(BaseModel):
+    level: str
+    start: StrictInt | None = None
+
+
+class SummaryTargetsRequest(BaseModel):
+    targets: list[SummaryTargetRequest]
+
+
+def _summary_targets(request: SummaryTargetsRequest) -> list[dict]:
+    return [
+        {"level": target.level, "start": target.start}
+        for target in request.targets
+    ]
 
 
 def _available_book_ids() -> list[str]:
@@ -61,6 +90,28 @@ def _all_book_ids() -> list[str]:
     if not BOOKS_DIR.exists():
         return []
     return sorted(path.name for path in BOOKS_DIR.iterdir() if path.is_dir())
+
+
+def _book_names(book_ids: list[str]) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for book_id in book_ids:
+        book_path = BookPaths(book_id)
+        if book_path.name_file.exists():
+            name = book_path.name_file.read_text(encoding="utf-8").strip()
+            if name:
+                names[book_id] = name
+                continue
+        marker = book_path.root / IMPORT_STATE_FILE
+        if marker.exists():
+            try:
+                name = json.loads(marker.read_text(encoding="utf-8")).get("name")
+            except (OSError, json.JSONDecodeError):
+                name = None
+            if isinstance(name, str) and name.strip():
+                names[book_id] = name.strip()
+                continue
+        names[book_id] = book_id
+    return names
 
 
 def _require_book_id(value: str) -> str:
@@ -134,6 +185,7 @@ def get_books():
             _write_selected_book_id(selected_book_id)
     return {
         "books": all_book_ids,
+        "book_names": _book_names(all_book_ids),
         "importing_book_ids": importing_book_ids,
         "selected_book_id": selected_book_id,
     }
@@ -144,6 +196,66 @@ def save_selected_book(request: BookSelectionRequest):
     book_id = _require_book_id(request.book_id)
     _write_selected_book_id(book_id)
     return {"selected_book_id": book_id}
+
+
+@app.get("/api/books/{book_id}/summaries")
+def get_book_summaries(book_id: str):
+    book_id = _require_book_id(book_id)
+    try:
+        return summary_service.get_overview(book_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.put("/api/books/{book_id}/summary-settings")
+def save_summary_settings(book_id: str, request: SummarySettingsRequest):
+    book_id = _require_book_id(book_id)
+    try:
+        return summary_service.set_enabled(book_id, request.enabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/books/{book_id}/reading-settings")
+def get_book_reading_settings(book_id: str):
+    book_id = _require_book_id(book_id)
+    try:
+        return get_reading_settings(book_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.put("/api/books/{book_id}/reading-settings")
+def save_book_reading_settings(book_id: str, request: ReadingSettingsRequest):
+    book_id = _require_book_id(book_id)
+    try:
+        return save_reading_settings(
+            book_id,
+            request.spoiler_mode,
+            request.read_through_chapter,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/books/{book_id}/summaries/plan")
+def plan_book_summaries(book_id: str, request: SummaryTargetsRequest):
+    book_id = _require_book_id(book_id)
+    try:
+        return summary_service.plan(book_id, _summary_targets(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/books/{book_id}/summary-jobs", status_code=202)
+def start_book_summary_job(book_id: str, request: SummaryTargetsRequest):
+    book_id = _require_book_id(book_id)
+    try:
+        return summary_service.start(book_id, _summary_targets(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/api/book-imports", status_code=201)
@@ -163,7 +275,7 @@ async def create_book_import(
 @app.put("/api/book-imports/{book_id}/info")
 def save_book_info(book_id: str, request: BookInfoRequest):
     try:
-        return book_import_service.save_info(book_id, request.content)
+        return book_import_service.save_info(book_id, request.name, request.content)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
