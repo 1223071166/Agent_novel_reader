@@ -18,6 +18,7 @@ describe("chat timeline", () => {
           content: "请读取第一章",
           tool_calls: null,
           tool_call_id: null,
+          tool_status: null,
           tool_result: null,
         },
         {
@@ -35,6 +36,7 @@ describe("chat timeline", () => {
             },
           ],
           tool_call_id: null,
+          tool_status: null,
           tool_result: null,
         },
         {
@@ -43,6 +45,7 @@ describe("chat timeline", () => {
           content: '{"title":"第一章"}',
           tool_calls: null,
           tool_call_id: "call-1",
+          tool_status: "error",
           tool_result: {
             data: { kind: "chapter", chapter_id: 1, title: "第一章", content: "正文" },
             display: "正文",
@@ -54,6 +57,7 @@ describe("chat timeline", () => {
           content: "第一章的内容如下。",
           tool_calls: null,
           tool_call_id: null,
+          tool_status: null,
           tool_result: null,
         },
       ],
@@ -82,7 +86,7 @@ describe("chat timeline", () => {
           data: { kind: "chapter", chapter_id: 1, title: "第一章", content: "正文" },
           display: "正文",
         },
-        status: "completed",
+        status: "error",
       },
     });
     expect(items[2]).toMatchObject({

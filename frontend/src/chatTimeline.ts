@@ -43,7 +43,7 @@ export function timelineFromConversation(conversation: Conversation): TimelineIt
           name: call?.name ?? "unknown",
           arguments: call?.arguments ?? {},
           result: message.tool_result ?? undefined,
-          status: "completed",
+          status: message.tool_status ?? "completed",
         },
       });
     }

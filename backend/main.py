@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, StrictBool, StrictInt
 
 from services.chat_service import ChatService
+from services.app_settings import get_app_settings, save_app_settings
 from services.book_import_service import BookImportService, IMPORT_STATE_FILE
 from services.summary_service import SummaryService
 from services.reading_service import get_reading_settings, save_reading_settings
@@ -61,6 +62,10 @@ class ReadingSettingsRequest(BaseModel):
     read_through_chapter: StrictInt
 
 
+class AppSettingsRequest(BaseModel):
+    tool_round_limit: StrictInt
+
+
 class SummaryTargetRequest(BaseModel):
     level: str
     start: StrictInt | None = None
@@ -75,6 +80,22 @@ def _summary_targets(request: SummaryTargetsRequest) -> list[dict]:
         {"level": target.level, "start": target.start}
         for target in request.targets
     ]
+
+
+@app.get("/api/settings")
+def load_app_settings():
+    try:
+        return get_app_settings()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.put("/api/settings")
+def update_app_settings(request: AppSettingsRequest):
+    try:
+        return save_app_settings(request.tool_round_limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _available_book_ids() -> list[str]:
@@ -153,6 +174,7 @@ def _conversation_payload(conversation: Conversation) -> dict:
             "content": message.content,
             "tool_calls": message.tool_calls,
             "tool_call_id": message.tool_call_id,
+            "tool_status": message.tool_status,
             "tool_result": (
                 make_tool_result(load_tool_result_data(message.content))
                 if message.role == "tool" and message.content is not None

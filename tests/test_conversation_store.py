@@ -1,5 +1,7 @@
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from services.conversation_store import ConversationStore
@@ -14,6 +16,38 @@ class ConversationStoreTests(unittest.TestCase):
 
     def print_success(self, message):
         print(f"[OK] {message}", flush=True)
+
+    def test_existing_database_adds_tool_status_column(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        database_path = Path(temp_dir.name) / "legacy.db"
+        with closing(sqlite3.connect(database_path)) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE conversations (
+                    id TEXT PRIMARY KEY,
+                    book_id TEXT NOT NULL,
+                    title TEXT NOT NULL
+                );
+                CREATE TABLE messages (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT,
+                    tool_calls TEXT,
+                    tool_call_id TEXT
+                );
+                """
+            )
+
+        store = ConversationStore(database_path)
+        with store._connect() as connection:
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(messages)")
+            }
+
+        self.assertIn("tool_status", columns)
 
     def test_two_conversations_store_system_messages_separately(self):
         store = self.create_store()
@@ -186,6 +220,7 @@ class ConversationStoreTests(unittest.TestCase):
                 role="tool",
                 content='{"title":"第一章"}',
                 tool_call_id="call-1",
+                tool_status="error",
             ),
         )
 
@@ -197,6 +232,7 @@ class ConversationStoreTests(unittest.TestCase):
         self.assertEqual(assistant.content, None)
         self.assertEqual(assistant.tool_calls, tool_calls)
         self.assertEqual(tool.tool_call_id, "call-1")
+        self.assertEqual(tool.tool_status, "error")
         self.assertEqual(tool.content, '{"title":"第一章"}')
         self.print_success("tool_calls 和 tool_call_id 等字段保存完整")
 

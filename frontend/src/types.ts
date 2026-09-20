@@ -23,6 +23,7 @@ export type Message = {
     function?: { name?: string; arguments?: string };
   }> | null;
   tool_call_id: string | null;
+  tool_status: "completed" | "error" | null;
   tool_result: ToolResult | null;
 };
 
@@ -100,6 +101,10 @@ export type ReadingSettings = {
   read_through_chapter: number;
 };
 
+export type AppSettings = {
+  tool_round_limit: number;
+};
+
 // 前端运行期间使用的状态类型
 
 export type ToolStatus = "running" | "completed" | "error";
@@ -150,4 +155,5 @@ export type BookImporterTarget = {
 export type RunningRequest = {
   bookId: string;
   conversationId: string;
+  stopping: boolean;
 };

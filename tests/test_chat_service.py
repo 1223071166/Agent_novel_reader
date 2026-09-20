@@ -85,6 +85,13 @@ class ChatServiceTests(unittest.TestCase):
         )
         self.storage_patcher.start()
         self.addCleanup(self.storage_patcher.stop)
+        self.round_limit_patcher = patch.object(
+            chat_module,
+            "get_tool_round_limit",
+            return_value=100,
+        )
+        self.round_limit_patcher.start()
+        self.addCleanup(self.round_limit_patcher.stop)
 
     @staticmethod
     def print_success(message):
@@ -283,8 +290,50 @@ class ChatServiceTests(unittest.TestCase):
         stored = service._store.load_conversation("tool", BOOK_ID)
         stored_result = json.loads(stored.messages[-2].content)
         self.assertEqual(stored_result["kind"], "chapter_list")
+        self.assertEqual(stored.messages[-2].tool_status, "completed")
         self.assertNotIn("display", stored_result)
         self.print_success("工具调用完成后可以继续生成最终回答")
+
+    def test_tool_round_limit_preserves_partial_answer_and_tool_result(self):
+        fake_client = FakeClient([[
+            text_chunk("先说明已经找到的部分。"),
+            tool_chunk("call-limit", "get_chapter_list", "{}"),
+            empty_chunk(),
+        ]])
+
+        with (
+            patch.object(chat_module, "get_tool_round_limit", return_value=1),
+            patch.object(
+                chat_module,
+                "AVAILABLE_TOOLS",
+                {"get_chapter_list": lambda context: {
+                    "kind": "chapter_list",
+                    "chapters": [{"chapter_id": 1, "title": "第一章"}],
+                }},
+            ),
+            patch.object(chat_module, "client", fake_client),
+        ):
+            service = chat_module.ChatService()
+            events = list(service.stream_message(BOOK_ID, "tool-limit", "继续查找"))
+
+        self.assertEqual(
+            [event.event for event in events],
+            ["message_start", "token", "tool_start", "tool_result", "error"],
+        )
+        self.assertEqual(events[-1].data["code"], "tool_round_limit")
+        self.assertNotIn("done", [event.event for event in events])
+
+        stored = service._store.load_conversation("tool-limit", BOOK_ID)
+        self.assertIsNotNone(stored)
+        assistant = next(
+            message
+            for message in stored.messages
+            if message.role == "assistant" and message.content
+        )
+        tool_result = next(message for message in stored.messages if message.role == "tool")
+        self.assertEqual(assistant.content, "先说明已经找到的部分。")
+        self.assertEqual(tool_result.tool_status, "completed")
+        self.print_success("达到工具轮数上限后仍保留部分回答和工具结果")
 
     def test_invalid_tool_arguments_return_tool_error_and_continue(self):
         fake_client = FakeClient([
@@ -300,6 +349,8 @@ class ChatServiceTests(unittest.TestCase):
         self.assertTrue(tool_result.data["error"])
         self.assertEqual(tool_result.data["result"]["data"]["kind"], "error")
         self.assertTrue(tool_result.data["result"]["display"].startswith("工具执行失败："))
+        stored = service._store.load_conversation("tool-error", BOOK_ID)
+        self.assertEqual(stored.messages[-2].tool_status, "error")
         self.assertEqual(events[-1].event, "done")
         self.print_success("工具参数错误会返回 tool error，并允许流程继续")
 

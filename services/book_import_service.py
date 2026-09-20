@@ -23,6 +23,7 @@ class BookImportService:
     def __init__(self) -> None:
         self._states: dict[str, dict[str, Any]] = {}
         self._states_lock = threading.Lock()
+        self._start_lock = threading.Lock()
         self._embedding_lock = threading.Lock()
         self._recover_interrupted_imports()
 
@@ -87,29 +88,30 @@ class BookImportService:
         return dict(state)
 
     def start_embedding(self, book_id: str) -> dict[str, Any]:
-        book_path = self._require_import(book_id)
-        if not book_path.info_file.exists():
-            raise ValueError("请先填写书籍信息")
+        with self._start_lock:
+            book_path = self._require_import(book_id)
+            if not book_path.info_file.exists():
+                raise ValueError("请先填写书籍信息")
 
-        state = self._read_state(book_path)
-        if state["status"] in {"pending", "loading_model", "encoding", "writing"}:
-            return state
+            state = self._read_state(book_path)
+            if state["status"] in {"pending", "loading_model", "encoding", "writing"}:
+                return state
 
-        state.update({
-            "status": "pending",
-            "processed": 0,
-            "total": 0,
-            "message": "向量化任务正在等待执行",
-            "error": None,
-        })
-        self._save_state(book_path, state)
-        threading.Thread(
-            target=self._run_embedding,
-            args=(book_path,),
-            daemon=True,
-            name=f"embedding-{book_id}",
-        ).start()
-        return dict(state)
+            state.update({
+                "status": "pending",
+                "processed": 0,
+                "total": 0,
+                "message": "向量化任务正在等待执行",
+                "error": None,
+            })
+            self._save_state(book_path, state)
+            threading.Thread(
+                target=self._run_embedding,
+                args=(book_path,),
+                daemon=True,
+                name=f"embedding-{book_id}",
+            ).start()
+            return dict(state)
 
     def get_status(self, book_id: str) -> dict[str, Any]:
         self._validate_book_id(book_id)

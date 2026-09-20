@@ -13,6 +13,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 DATA_DIR = PROJECT_ROOT / "data"
 BOOKS_DIR = DATA_DIR / "books"
 SELECTED_BOOK_FILE = DATA_DIR / "selected_book.txt"
+APP_SETTINGS_FILE = DATA_DIR / "app_settings.json"
 DATABASE_DIR = DATA_DIR / "database"
 
 BOOK_ID = "shengweizhilv"

@@ -49,6 +49,7 @@ class ConversationStore:
                     content TEXT,
                     tool_calls TEXT,
                     tool_call_id TEXT,
+                    tool_status TEXT,
                     FOREIGN KEY (conversation_id)
                         REFERENCES conversations(id)
                         ON DELETE CASCADE
@@ -60,6 +61,12 @@ class ConversationStore:
                     ON messages(conversation_id);
                 """
             )
+            message_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(messages)")
+            }
+            if "tool_status" not in message_columns:
+                connection.execute("ALTER TABLE messages ADD COLUMN tool_status TEXT")
 
     def create_conversation(self, conversation_id: str, book_id: str, title: str) -> None:
         with self._connect() as connection:
@@ -78,9 +85,10 @@ class ConversationStore:
                     role,
                     content,
                     tool_calls,
-                    tool_call_id
+                    tool_call_id,
+                    tool_status
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message.id,
@@ -91,6 +99,7 @@ class ConversationStore:
                     if message.tool_calls is not None
                     else None,
                     message.tool_call_id,
+                    message.tool_status,
                 ),
             )
 
@@ -106,7 +115,7 @@ class ConversationStore:
 
             rows = connection.execute(
                 """
-                SELECT id, role, content, tool_calls, tool_call_id
+                SELECT id, role, content, tool_calls, tool_call_id, tool_status
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY rowid
@@ -129,7 +138,7 @@ class ConversationStore:
 
             message_rows = connection.execute(
                 """
-                SELECT id, conversation_id, role, content, tool_calls, tool_call_id
+                SELECT id, conversation_id, role, content, tool_calls, tool_call_id, tool_status
                 FROM messages
                 ORDER BY conversation_id, rowid
                 """
@@ -171,4 +180,5 @@ class ConversationStore:
             content=row["content"],
             tool_calls=tool_calls,
             tool_call_id=row["tool_call_id"],
+            tool_status=row["tool_status"],
         )

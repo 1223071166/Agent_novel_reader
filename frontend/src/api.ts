@@ -1,4 +1,5 @@
 import type {
+  AppSettings,
   BookImportStatus,
   BookSelection,
   ChatEvent,
@@ -35,6 +36,22 @@ export async function saveBookSelection(bookId: string): Promise<void> {
     body: JSON.stringify({ book_id: bookId }),
   });
   if (!response.ok) throw await responseError(response, "保存当前书籍失败");
+}
+
+export async function loadAppSettings(): Promise<AppSettings> {
+  const response = await fetch(`${API_BASE_URL}/api/settings`);
+  if (!response.ok) throw await responseError(response, "加载设置失败");
+  return await response.json() as AppSettings;
+}
+
+export async function saveAppSettings(toolRoundLimit: number): Promise<AppSettings> {
+  const response = await fetch(`${API_BASE_URL}/api/settings`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tool_round_limit: toolRoundLimit }),
+  });
+  if (!response.ok) throw await responseError(response, "保存设置失败");
+  return await response.json() as AppSettings;
 }
 
 
@@ -222,6 +239,7 @@ export async function streamChat(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let terminalEventReceived = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -232,12 +250,18 @@ export async function streamChat(
       const eventLine = block.split("\n").find((line) => line.startsWith("event: "));
       const dataLine = block.split("\n").find((line) => line.startsWith("data: "));
       if (!eventLine || !dataLine) continue;
+      const event = eventLine.slice("event: ".length);
+      if (event === "done" || event === "error") terminalEventReceived = true;
       onEvent({
-        event: eventLine.slice("event: ".length),
+        event,
         data: JSON.parse(dataLine.slice("data: ".length)),
       });
     }
     if (done) break;
+  }
+
+  if (!terminalEventReceived) {
+    throw new Error("聊天连接意外中断，请重新发送");
   }
 }
 

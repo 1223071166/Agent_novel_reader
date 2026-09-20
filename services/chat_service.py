@@ -10,6 +10,7 @@ from typing import Any, Iterator
 from config import MODEL, SHOW_USAGE, MESSAGE_STORAGE_FILE, client, BookPaths
 from novel_tools import AVAILABLE_TOOLS, NovelToolContext, build_tools, load_titles
 from prompts import get_system_prompt
+from services.app_settings import get_tool_round_limit
 from services.reading_service import spoiler_chapter_limit
 from services.summary_service import summary_enabled
 from usage_stats import get_field, read_usage
@@ -23,7 +24,6 @@ from tool_results import (
 )
 
 
-MAX_TOOL_ROUNDS = 100
 MAX_CONVERSATION_TITLE_LENGTH = 20
 
 
@@ -112,6 +112,15 @@ class ChatService:
         user_content: str,
     ) -> Iterator[ChatEvent]:
         try:
+            tool_round_limit = get_tool_round_limit()
+        except ValueError as exc:
+            yield ChatEvent("error", {
+                "code": "invalid_app_settings",
+                "message": str(exc),
+            })
+            return
+
+        try:
             use_summary_tool = summary_enabled(book_id)
             max_chapter = spoiler_chapter_limit(book_id)
             title = self.create_conversation(
@@ -164,6 +173,7 @@ class ChatService:
                 cancel_event,
                 use_summary_tool,
                 max_chapter,
+                tool_round_limit,
             ):
                 yield event
                 has_error = has_error or event.event == "error"
@@ -184,6 +194,7 @@ class ChatService:
         cancel_event: threading.Event,
         use_summary_tool: bool,
         max_chapter: int | None,
+        tool_round_limit: int,
     ) -> Iterator[ChatEvent]:
         tool_context = NovelToolContext(book_path, max_chapter)
         tools = build_tools(use_summary_tool)
@@ -191,7 +202,7 @@ class ChatService:
             tool["function"]["name"]
             for tool in tools
         }
-        for round_index in range(1, MAX_TOOL_ROUNDS + 1):
+        for round_index in range(1, tool_round_limit + 1):
             if cancel_event.is_set():
                 yield ChatEvent("error", {
                 "code": "user_interreption",
@@ -302,7 +313,7 @@ class ChatService:
 
         yield ChatEvent("error", {
             "code": "tool_round_limit",
-            "message": f"工具调用超过最大轮数 {MAX_TOOL_ROUNDS}",
+            "message": f"工具调用超过最大轮数 {tool_round_limit}",
         })
 
     def _execute_tool(
@@ -327,7 +338,7 @@ class ChatService:
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             result_data = error_result(str(exc))
             result = make_tool_result(result_data)
-            self._append_tool_result(conversation_id, call_id, result_data)
+            self._append_tool_result(conversation_id, call_id, result_data, "error")
             yield ChatEvent("tool_result", {
                 "round": round_index,
                 "tool_call_id": call_id,
@@ -358,7 +369,12 @@ class ChatService:
             result = make_tool_result(result_data)
             is_error = True
 
-        self._append_tool_result(conversation_id, call_id, result_data)
+        self._append_tool_result(
+            conversation_id,
+            call_id,
+            result_data,
+            "error" if is_error else "completed",
+        )
         yield ChatEvent("tool_result", {
             "round": round_index,
             "tool_call_id": call_id,
@@ -368,13 +384,20 @@ class ChatService:
             "error": is_error,
         })
 
-    def _append_tool_result(self, conversation_id: str, call_id: str, result: dict[str, Any]) -> None:
+    def _append_tool_result(
+        self,
+        conversation_id: str,
+        call_id: str,
+        result: dict[str, Any],
+        status: str,
+    ) -> None:
         self._append_message(
             conversation_id,
             Message(
                 id=str(uuid.uuid4()),
                 role="tool",
                 tool_call_id=call_id,
+                tool_status=status,
                 content=json.dumps(result, ensure_ascii=False), #保存原始结构
             ),
         )

@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -154,6 +155,70 @@ class BookImportServiceTests(unittest.TestCase):
             self.assertEqual((book_root / "name.txt").read_text(encoding="utf-8"), "原书名\n")
             self.assertEqual((book_root / "info.txt").read_text(encoding="utf-8"), "原概况\n")
             self.assertTrue(building_dir.exists())
+
+    def test_concurrent_embedding_starts_create_only_one_worker(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            books_dir = root / "books"
+            database_dir = root / "database"
+            book_id = "book_123456789abc"
+            book_root = books_dir / book_id
+            book_root.mkdir(parents=True)
+            (book_root / "info.txt").write_text("测试概况\n", encoding="utf-8")
+            (book_root / IMPORT_STATE_FILE).write_text(json.dumps({
+                "book_id": book_id,
+                "status": "ready_for_embedding",
+                "processed": 0,
+                "total": 0,
+                "message": "可以开始向量化",
+                "error": None,
+            }), encoding="utf-8")
+
+            with (
+                patch.object(config, "BOOKS_DIR", books_dir),
+                patch.object(config, "DATABASE_DIR", database_dir),
+                patch.object(import_module, "BOOKS_DIR", books_dir),
+                patch.object(import_module, "DATABASE_DIR", database_dir),
+            ):
+                service = BookImportService()
+                original_save_state = service._save_state
+                worker_calls = 0
+                worker_calls_lock = threading.Lock()
+
+                def slow_save_state(book_path, state):
+                    if state["status"] == "pending":
+                        time.sleep(0.05)
+                    original_save_state(book_path, state)
+
+                def record_worker(_book_path):
+                    nonlocal worker_calls
+                    with worker_calls_lock:
+                        worker_calls += 1
+
+                class ImmediateWorker:
+                    def __init__(self, *, target, args, **_kwargs):
+                        self._target = target
+                        self._args = args
+
+                    def start(self):
+                        self._target(*self._args)
+
+                request_workers = [
+                    threading.Thread(target=service.start_embedding, args=(book_id,))
+                    for _ in range(2)
+                ]
+                with (
+                    patch.object(service, "_save_state", slow_save_state),
+                    patch.object(service, "_run_embedding", record_worker),
+                    patch.object(import_module.threading, "Thread", ImmediateWorker),
+                ):
+                    for worker in request_workers:
+                        worker.start()
+                    for worker in request_workers:
+                        worker.join()
+
+                self.assertEqual(worker_calls, 1)
+                self.assertEqual(service.get_status(book_id)["status"], "pending")
 
 
 if __name__ == "__main__":

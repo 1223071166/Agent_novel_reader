@@ -5,6 +5,7 @@ import {
   appendUserItem,
 } from "./chatTimeline";
 import BookImporter from "./BookImporter";
+import SettingsDialog from "./SettingsDialog";
 import SummaryManager from "./SummaryManager";
 import SpoilerControls from "./SpoilerControls";
 import {
@@ -63,6 +64,7 @@ function App() {
   const [switchingBook, setSwitchingBook] = useState(false);
   const [bookImporterTarget, setBookImporterTarget] = useState<BookImporterTarget | null>(null);
   const [summaryManagerBookId, setSummaryManagerBookId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [appError, setAppError] = useState("");
 
   useEffect(() => {
@@ -103,12 +105,17 @@ function App() {
       request.bookId === targetBookId && request.conversationId === conversationId
     ))
   );
-  const activeConversationRunning = Boolean(
-    bookId
-    && activeConversation
-    && isConversationRunning(bookId, activeConversation.id),
-  );
+  const activeRunningRequest = bookId && activeConversation
+    ? runningRequests.find((request) => (
+      request.bookId === bookId && request.conversationId === activeConversation.id
+    ))
+    : undefined;
+  const activeConversationRunning = Boolean(activeRunningRequest);
+  const activeConversationStopping = activeRunningRequest?.stopping ?? false;
   const hasRunningRequests = runningRequests.length > 0;
+  const visibleMessages = activeConversation?.messages.filter((item) => (
+    item.type !== "assistant" || item.content !== ""
+  )) ?? [];
 
   const addUserMessageToConversation = (
     targetBookId: string,
@@ -239,7 +246,7 @@ function App() {
     addUserMessageToConversation(requestBookId, conversationId, text);
     setRunningRequests((previous) => [
       ...previous,
-      { bookId: requestBookId, conversationId },
+      { bookId: requestBookId, conversationId, stopping: false },
     ]);
     setAppError("");
     try {
@@ -307,11 +314,21 @@ function App() {
   };
 
   const stopActiveConversation = () => {
-    if (!bookId || !activeConversation) return;
+    if (!bookId || !activeConversation || activeConversationStopping) return;
 
     const requestBookId = bookId;
     const conversationId = activeConversation.id;
+    setRunningRequests((previous) => previous.map((request) => (
+      request.bookId === requestBookId && request.conversationId === conversationId
+        ? { ...request, stopping: true }
+        : request
+    )));
     void cancelStream(requestBookId, conversationId).catch((requestError) => {
+      setRunningRequests((previous) => previous.map((request) => (
+        request.bookId === requestBookId && request.conversationId === conversationId
+          ? { ...request, stopping: false }
+          : request
+      )));
       const message = requestError instanceof Error ? requestError.message : "取消请求失败";
       setConversationError(requestBookId, conversationId, message);
     });
@@ -381,7 +398,9 @@ function App() {
         </div>
 
         <div className="sidebar-bottom">
-          <div className="sidebar-item"><span>⚙</span> 设置</div>
+          <button className="sidebar-item" type="button" onClick={() => setSettingsOpen(true)}>
+            <span>⚙</span> 设置
+          </button>
         </div>
       </aside>
 
@@ -435,30 +454,40 @@ function App() {
             </div>
           ) : (
             <div className="messages">
-              {activeConversation.messages.map((item) => (
-                <div key={item.id} className={`message-row ${item.type}`}>
-                  <div className="avatar">{item.type === "user" ? "你" : "✦"}</div>
-                  <div className="message-content">
-                    {item.type === "tool" && (
-                      <details className={`tool-card ${item.tool.status}`}>
-                        <summary>
-                          <span className="tool-card-title">
-                            {toolDisplayName(item.tool.name, item.tool.arguments, item.tool.result)}
-                          </span>
-                        </summary>
-                        <div className="tool-card-body">
-                          {item.tool.result !== undefined && (
-                            <div className="tool-field">
-                              <pre>{item.tool.result.display}</pre>
-                            </div>
-                          )}
-                        </div>
-                      </details>
-                    )}
-                    {(item.type === "user" || item.type === "assistant") && item.content}
+              {visibleMessages.map((item, index, items) => {
+                const showAvatar = item.type === "user"
+                  || index === 0
+                  || items[index - 1].type === "user";
+                return (
+                  <div
+                    key={item.id}
+                    className={`message-row ${item.type}${showAvatar ? " turn-start" : " continuation"}`}
+                  >
+                    {showAvatar
+                      ? <div className="avatar">{item.type === "user" ? "你" : "✦"}</div>
+                      : <div className="avatar-space" aria-hidden="true" />}
+                    <div className="message-content">
+                      {item.type === "tool" && (
+                        <details className={`tool-card ${item.tool.status}`}>
+                          <summary>
+                            <span className="tool-card-title">
+                              {toolDisplayName(item.tool.name, item.tool.arguments, item.tool.result)}
+                            </span>
+                          </summary>
+                          <div className="tool-card-body">
+                            {item.tool.result !== undefined && (
+                              <div className="tool-field">
+                                <pre>{item.tool.result.display}</pre>
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                      )}
+                      {(item.type === "user" || item.type === "assistant") && item.content}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
@@ -489,8 +518,17 @@ function App() {
                 }
               }}
             />
-            <button className="send-button" type="submit" disabled={switchingBook || !activeConversation || (!input.trim() && !activeConversationRunning)}>
-              {activeConversationRunning ? "■" : "↑"}
+            <button
+              className={`send-button${activeConversationStopping ? " stopping" : ""}`}
+              type="submit"
+              disabled={
+                switchingBook
+                || !activeConversation
+                || activeConversationStopping
+                || (!input.trim() && !activeConversationRunning)
+              }
+            >
+              {activeConversationStopping ? "停止中…" : activeConversationRunning ? "■" : "↑"}
             </button>
           </form>
           <div className="input-hint"><span>✦</span> 回答来自小说内容检索，请检查重要信息。</div>
@@ -515,6 +553,7 @@ function App() {
           onClose={() => setSummaryManagerBookId(null)}
         />
       )}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }
