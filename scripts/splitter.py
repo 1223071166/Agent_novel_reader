@@ -1,7 +1,8 @@
+import argparse
 import re
 import shutil
 
-from config import BOOK_ID, BookPaths
+from config import BookPaths
 
 
 def find_chapters(text):
@@ -66,9 +67,13 @@ def split_book(book_path: BookPaths) -> int:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="将指定书籍的原文切分为章节文件")
+    parser.add_argument("book_id", help="data/books 下的书籍目录名")
+    args = parser.parse_args()
+
     print("正在读取小说...")
 
-    book_path = BookPaths(BOOK_ID)
+    book_path = BookPaths(args.book_id)
     print("正在分析章节...")
     chapter_count = split_book(book_path)
     print(f"发现 {chapter_count} 个章节")

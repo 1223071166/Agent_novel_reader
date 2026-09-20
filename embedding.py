@@ -9,7 +9,6 @@ from FlagEmbedding import FlagAutoModel
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from config import (
-    BOOK_ID,
     BookPaths,
     EMBEDDING_BATCH_SIZE,
     EMBEDDING_PROGRESS_BATCH_SIZE,
@@ -377,16 +376,3 @@ def search(
 
     ranked.sort(key=lambda item: item["score"], reverse=True)
     return _select_diverse_results(ranked, n)
-
-
-if __name__=="__main__":
-    #第一次运行取消注释
-    #reset_db(BookPaths(BOOK_ID))
-    #build_embedding(BookPaths(BOOK_ID), BookPaths(BOOK_ID).vector_db_dir)
-
-    for item in search("程斌初次遇见文雯", BookPaths(BOOK_ID), None):
-        meta=item["metadata"]
-        print(
-            f"\nscore={item['score']:.4f} chapter={meta['chapter']} chunk={meta['chunk']} title={meta['title']}\n"
-        )
-        print(item["text"][:500]+"...")

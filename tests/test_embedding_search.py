@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 def load_embedding_module():
     config = types.ModuleType("config")
-    config.BOOK_ID = "book-test"
     config.BookPaths = object
     config.EMBEDDING_BATCH_SIZE = 16
     config.EMBEDDING_PROGRESS_BATCH_SIZE = 128

@@ -12,9 +12,6 @@ APP_SETTINGS_FILE = DATA_DIR / "app_settings.json"
 MODEL_CREDENTIALS_FILE = DATA_DIR / "model_credentials.json"
 DATABASE_DIR = DATA_DIR / "database"
 
-BOOK_ID = "shengweizhilv"
-
-
 @dataclass(frozen=True)
 class BookPaths:
     book_id: str

@@ -8,7 +8,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import services.chat_service as chat_module
-from config import BOOK_ID
+
+
+TEST_BOOK_ID = "shengweizhilv"
 
 
 def text_chunk(content):
@@ -126,7 +128,7 @@ class ChatServiceTests(unittest.TestCase):
 
         with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
-            events = list(service.stream_message(BOOK_ID, "normal", "请打招呼"))
+            events = list(service.stream_message(TEST_BOOK_ID, "normal", "请打招呼"))
 
         self.assertEqual(
             [event.event for event in events],
@@ -139,7 +141,7 @@ class ChatServiceTests(unittest.TestCase):
         self.assertEqual(events[0].data["title"], "请打招呼")
         self.assertEqual(fake_client.chat.completions.calls[0]["model"], "test-model")
 
-        conversation = service._store.load_conversation("normal", BOOK_ID)
+        conversation = service._store.load_conversation("normal", TEST_BOOK_ID)
         self.assertIsNotNone(conversation)
         self.assertEqual(conversation.title, "请打招呼")
         self.assertEqual(conversation.messages[-2].role, "user")
@@ -156,7 +158,7 @@ class ChatServiceTests(unittest.TestCase):
         with patch.object(chat_module, "get_model_connection", return_value=model_connection(enabled_client)):
             enabled_service = chat_module.ChatService()
             enabled_events = list(enabled_service.stream_message(
-                BOOK_ID,
+                TEST_BOOK_ID,
                 "usage-enabled",
                 "显示用量",
             ))
@@ -193,7 +195,7 @@ class ChatServiceTests(unittest.TestCase):
         ):
             disabled_service = chat_module.ChatService()
             disabled_events = list(disabled_service.stream_message(
-                BOOK_ID,
+                TEST_BOOK_ID,
                 "usage-disabled",
                 "隐藏用量",
             ))
@@ -223,8 +225,8 @@ class ChatServiceTests(unittest.TestCase):
             patch.object(chat_module, "build_tools", side_effect=tools_for_setting),
         ):
             service = chat_module.ChatService()
-            list(service.stream_message(BOOK_ID, "summary-toggle", "第一次"))
-            list(service.stream_message(BOOK_ID, "summary-toggle", "第二次"))
+            list(service.stream_message(TEST_BOOK_ID, "summary-toggle", "第一次"))
+            list(service.stream_message(TEST_BOOK_ID, "summary-toggle", "第二次"))
 
         first_request, second_request = fake_client.chat.completions.calls
         self.assertEqual(first_request["messages"][0]["content"], "prompt:False:None")
@@ -266,7 +268,7 @@ class ChatServiceTests(unittest.TestCase):
             patch.object(chat_module, "AVAILABLE_TOOLS", {"get_chapter": get_chapter}),
         ):
             service = chat_module.ChatService()
-            events = list(service.stream_message(BOOK_ID, "spoiler", "第三章发生了什么"))
+            events = list(service.stream_message(TEST_BOOK_ID, "spoiler", "第三章发生了什么"))
 
         self.assertEqual(received_limits, [2])
         self.assertEqual(fake_client.chat.completions.calls[0]["messages"][0]["content"], "limit:2")
@@ -279,12 +281,12 @@ class ChatServiceTests(unittest.TestCase):
 
         with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
-            events = list(service.stream_message(BOOK_ID, "provider-error", "继续"))
+            events = list(service.stream_message(TEST_BOOK_ID, "provider-error", "继续"))
 
         self.assertEqual(events[-1].event, "error")
         self.assertEqual(events[-1].data["code"], "provider_error")
         self.assertNotIn("done", [event.event for event in events])
-        self.assertEqual(service._store.load_conversation("provider-error", BOOK_ID).messages[-1].role, "user")
+        self.assertEqual(service._store.load_conversation("provider-error", TEST_BOOK_ID).messages[-1].role, "user")
         self.print_success("模型请求失败时会返回 error 且不会发送 done")
 
     def test_conversations_stay_bound_to_their_book(self):
@@ -313,12 +315,12 @@ class ChatServiceTests(unittest.TestCase):
         with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
             first_events = list(service.stream_message(
-                BOOK_ID,
+                TEST_BOOK_ID,
                 "title",
                 "  请帮我分析\n这一段里发生了什么事情以及人物关系  ",
             ))
             second_events = list(service.stream_message(
-                BOOK_ID,
+                TEST_BOOK_ID,
                 "title",
                 "这句话不应该成为新标题",
             ))
@@ -327,7 +329,7 @@ class ChatServiceTests(unittest.TestCase):
         self.assertEqual(first_events[0].data["title"], expected)
         self.assertEqual(second_events[0].data["title"], expected)
         self.assertEqual(
-            service._store.load_conversation("title", BOOK_ID).title,
+            service._store.load_conversation("title", TEST_BOOK_ID).title,
             expected,
         )
         self.print_success("会话标题取首条用户消息并按长度截断")
@@ -347,7 +349,7 @@ class ChatServiceTests(unittest.TestCase):
             }},
         ), patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
-            events = list(service.stream_message(BOOK_ID, "tool", "列出章节"))
+            events = list(service.stream_message(TEST_BOOK_ID, "tool", "列出章节"))
 
         self.assertEqual(
             [event.event for event in events],
@@ -366,7 +368,7 @@ class ChatServiceTests(unittest.TestCase):
             fake_client.chat.completions.calls[1]["messages"][-1]["content"],
             "第 1 章：第一章",
         )
-        stored = service._store.load_conversation("tool", BOOK_ID)
+        stored = service._store.load_conversation("tool", TEST_BOOK_ID)
         stored_result = json.loads(stored.messages[-2].content)
         self.assertEqual(stored_result["kind"], "chapter_list")
         self.assertEqual(stored.messages[-2].tool_status, "completed")
@@ -404,7 +406,7 @@ class ChatServiceTests(unittest.TestCase):
             patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)),
         ):
             service = chat_module.ChatService()
-            events = list(service.stream_message(BOOK_ID, "tool-limit", "继续查找"))
+            events = list(service.stream_message(TEST_BOOK_ID, "tool-limit", "继续查找"))
 
         self.assertEqual(
             [event.event for event in events],
@@ -425,7 +427,7 @@ class ChatServiceTests(unittest.TestCase):
             },
         )
 
-        stored = service._store.load_conversation("tool-limit", BOOK_ID)
+        stored = service._store.load_conversation("tool-limit", TEST_BOOK_ID)
         self.assertIsNotNone(stored)
         assistant_contents = [
             message.content
@@ -448,13 +450,13 @@ class ChatServiceTests(unittest.TestCase):
 
         with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
-            events = list(service.stream_message(BOOK_ID, "tool-error", "执行工具"))
+            events = list(service.stream_message(TEST_BOOK_ID, "tool-error", "执行工具"))
 
         tool_result = next(event for event in events if event.event == "tool_result")
         self.assertTrue(tool_result.data["error"])
         self.assertEqual(tool_result.data["result"]["data"]["kind"], "error")
         self.assertTrue(tool_result.data["result"]["display"].startswith("工具执行失败："))
-        stored = service._store.load_conversation("tool-error", BOOK_ID)
+        stored = service._store.load_conversation("tool-error", TEST_BOOK_ID)
         self.assertEqual(stored.messages[-2].tool_status, "error")
         self.assertEqual(events[-1].event, "done")
         self.print_success("工具参数错误会返回 tool error，并允许流程继续")
@@ -469,14 +471,14 @@ class ChatServiceTests(unittest.TestCase):
 
             worker = threading.Thread(
                 target=lambda: first_events.extend(
-                    service.stream_message(BOOK_ID, "busy", "第一条消息")
+                    service.stream_message(TEST_BOOK_ID, "busy", "第一条消息")
                 ),
             )
             worker.start()
             self.assertTrue(started.wait(timeout=2))
 
-            second_events = list(service.stream_message(BOOK_ID, "busy", "第二条消息"))
-            service.cancel_conversation(BOOK_ID, "busy")
+            second_events = list(service.stream_message(TEST_BOOK_ID, "busy", "第二条消息"))
+            service.cancel_conversation(TEST_BOOK_ID, "busy")
             worker.join(timeout=2)
 
         self.assertFalse(worker.is_alive())
@@ -495,13 +497,13 @@ class ChatServiceTests(unittest.TestCase):
 
             worker = threading.Thread(
                 target=lambda: events.extend(
-                    service.stream_message(BOOK_ID, "cancel", "请生成长回答")
+                    service.stream_message(TEST_BOOK_ID, "cancel", "请生成长回答")
                 ),
             )
             worker.start()
             self.assertTrue(started.wait(timeout=2))
 
-            service.cancel_conversation(BOOK_ID, "cancel")
+            service.cancel_conversation(TEST_BOOK_ID, "cancel")
             worker.join(timeout=2)
 
         self.assertFalse(worker.is_alive())
@@ -521,21 +523,21 @@ class ChatServiceTests(unittest.TestCase):
             service = chat_module.ChatService()
             worker = threading.Thread(
                 target=lambda: list(
-                    service.stream_message(BOOK_ID, "busy-delete", "请生成长回答")
+                    service.stream_message(TEST_BOOK_ID, "busy-delete", "请生成长回答")
                 ),
             )
             worker.start()
             self.assertTrue(started.wait(timeout=2))
 
             with self.assertRaisesRegex(ValueError, "正在生成回复"):
-                service.delete_conversation(BOOK_ID, "busy-delete")
+                service.delete_conversation(TEST_BOOK_ID, "busy-delete")
 
-            service.cancel_conversation(BOOK_ID, "busy-delete")
+            service.cancel_conversation(TEST_BOOK_ID, "busy-delete")
             worker.join(timeout=2)
-            service.delete_conversation(BOOK_ID, "busy-delete")
+            service.delete_conversation(TEST_BOOK_ID, "busy-delete")
 
         self.assertFalse(worker.is_alive())
-        self.assertIsNone(service._store.load_conversation("busy-delete", BOOK_ID))
+        self.assertIsNone(service._store.load_conversation("busy-delete", TEST_BOOK_ID))
         self.print_success("正在生成回复的会话不能被删除，停止后可以删除")
 
     def test_cancelling_one_conversation_does_not_stop_another(self):
@@ -552,12 +554,12 @@ class ChatServiceTests(unittest.TestCase):
             service = chat_module.ChatService()
             first_worker = threading.Thread(
                 target=lambda: first_events.extend(
-                    service.stream_message(BOOK_ID, "parallel-1", "第一条消息")
+                    service.stream_message(TEST_BOOK_ID, "parallel-1", "第一条消息")
                 ),
             )
             second_worker = threading.Thread(
                 target=lambda: second_events.extend(
-                    service.stream_message(BOOK_ID, "parallel-2", "第二条消息")
+                    service.stream_message(TEST_BOOK_ID, "parallel-2", "第二条消息")
                 ),
             )
 
@@ -566,7 +568,7 @@ class ChatServiceTests(unittest.TestCase):
             second_worker.start()
             self.assertTrue(second_started.wait(timeout=2))
 
-            service.cancel_conversation(BOOK_ID, "parallel-1")
+            service.cancel_conversation(TEST_BOOK_ID, "parallel-1")
             first_worker.join(timeout=2)
 
             self.assertFalse(first_worker.is_alive())
@@ -574,7 +576,7 @@ class ChatServiceTests(unittest.TestCase):
             self.assertEqual(first_events[-1].data["code"], "user_interreption")
             self.assertNotIn("error", [event.event for event in second_events])
 
-            service.cancel_conversation(BOOK_ID, "parallel-2")
+            service.cancel_conversation(TEST_BOOK_ID, "parallel-2")
             second_worker.join(timeout=2)
 
         self.assertFalse(second_worker.is_alive())
