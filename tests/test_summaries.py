@@ -69,17 +69,20 @@ class SummaryPathsTests(unittest.TestCase):
             [summary_chunk("有效摘要")],
         ])
 
-        with patch("summaries.client_summary", client):
-            self.assertEqual(_summarize("system", "chapter"), "有效摘要")
+        connection = SimpleNamespace(client=client, model_name="test-model")
+        self.assertEqual(
+            _summarize("system", "chapter", model_connection=connection),
+            "有效摘要",
+        )
 
         self.assertEqual(completions.call_count, 3)
 
     def test_three_empty_model_responses_raise_an_error(self):
         client, completions = fake_client([[], [], []])
 
-        with patch("summaries.client_summary", client):
-            with self.assertRaisesRegex(RuntimeError, "连续 3 次返回空摘要"):
-                _summarize("system", "chapter")
+        connection = SimpleNamespace(client=client, model_name="test-model")
+        with self.assertRaisesRegex(RuntimeError, "连续 3 次返回空摘要"):
+            _summarize("system", "chapter", model_connection=connection)
 
         self.assertEqual(completions.call_count, 3)
 

@@ -44,11 +44,29 @@ export async function loadAppSettings(): Promise<AppSettings> {
   return await response.json() as AppSettings;
 }
 
-export async function saveAppSettings(toolRoundLimit: number): Promise<AppSettings> {
+export async function saveAppSettings(
+  settings: {
+    toolRoundLimit: number;
+    showUsage: boolean;
+    modelProvider: "siliconflow" | "custom";
+    siliconflowApiKey: string | null;
+    customBaseUrl: string;
+    customModelName: string;
+    customApiKey: string | null;
+  },
+): Promise<AppSettings> {
   const response = await fetch(`${API_BASE_URL}/api/settings`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tool_round_limit: toolRoundLimit }),
+    body: JSON.stringify({
+      tool_round_limit: settings.toolRoundLimit,
+      show_usage: settings.showUsage,
+      model_provider: settings.modelProvider,
+      siliconflow_api_key: settings.siliconflowApiKey,
+      custom_base_url: settings.customBaseUrl,
+      custom_model_name: settings.customModelName,
+      custom_api_key: settings.customApiKey,
+    }),
   });
   if (!response.ok) throw await responseError(response, "保存设置失败");
   return await response.json() as AppSettings;

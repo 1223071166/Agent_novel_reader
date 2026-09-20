@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { cancelStream, deleteConversation as deleteConversationApi, loadBookSelection, loadConversations, saveBookSelection, streamChat } from "./api";
 import {
+  addTokenUsage,
   applyChatEvent,
   appendUserItem,
 } from "./chatTimeline";
@@ -131,6 +132,7 @@ function App() {
         messages: appendUserItem(conversation.messages, content),
         draft: "",
         error: "",
+        usage: null,
       }),
     ));
   };
@@ -150,6 +152,9 @@ function App() {
           ? chatEvent.data.title
           : conversation.title,
         messages: applyChatEvent(conversation.messages, chatEvent),
+        usage: chatEvent.event === "usage"
+          ? addTokenUsage(conversation.usage, chatEvent.data)
+          : conversation.usage,
       }),
     ));
   };
@@ -398,7 +403,12 @@ function App() {
         </div>
 
         <div className="sidebar-bottom">
-          <button className="sidebar-item" type="button" onClick={() => setSettingsOpen(true)}>
+          <button
+            className="sidebar-item"
+            type="button"
+            disabled={hasRunningRequests}
+            onClick={() => setSettingsOpen(true)}
+          >
             <span>⚙</span> 设置
           </button>
         </div>
@@ -488,6 +498,19 @@ function App() {
                   </div>
                 );
               })}
+              {activeConversation.usage && (
+                <div className="usage-row">
+                  <div className="avatar-space" aria-hidden="true" />
+                  <div>
+                    本轮 Token：输入 {activeConversation.usage.input}
+                    <span>·</span> 输出 {activeConversation.usage.output}
+                    <span>·</span> 合计 {activeConversation.usage.total}
+                    <span>·</span> 缓存命中 {activeConversation.usage.cached_input}
+                    <span>·</span> 缓存未命中 {activeConversation.usage.cache_miss_input}
+                    <span>·</span> 推理 {activeConversation.usage.reasoning}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -553,7 +576,21 @@ function App() {
           onClose={() => setSummaryManagerBookId(null)}
         />
       )}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && (
+        <SettingsDialog
+          onClose={() => setSettingsOpen(false)}
+          onSaved={(showUsage) => {
+            if (showUsage) return;
+            setWorkspace((previous) => previous ? {
+              ...previous,
+              conversations: previous.conversations.map((conversation) => ({
+                ...conversation,
+                usage: null,
+              })),
+            } : previous);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import config
@@ -23,7 +24,8 @@ class SummaryServiceTests(unittest.TestCase):
             books_dir = Path(temp_dir)
             self._create_book(books_dir)
 
-            def generate(level, book_path, start, on_progress):
+            def generate(level, book_path, start, on_progress, model_connection):
+                self.assertEqual(model_connection.model_name, "test-model")
                 on_progress("start", "正在生成第 1 章摘要")
                 on_progress("complete", "正在生成第 1 章摘要")
                 on_progress("start", "正在合并第 1-1 章摘要")
@@ -34,6 +36,11 @@ class SummaryServiceTests(unittest.TestCase):
             with (
                 patch.object(config, "BOOKS_DIR", books_dir),
                 patch.object(summary_module, "generate_summary", side_effect=generate),
+                patch.object(
+                    summary_module,
+                    "get_selected_model_connection",
+                    return_value=SimpleNamespace(client=object(), model_name="test-model"),
+                ),
             ):
                 service = summary_module.SummaryService(books_dir)
                 self.assertFalse(service.get_overview("book-test")["enabled"])

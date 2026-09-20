@@ -24,6 +24,20 @@ def empty_chunk():
     return SimpleNamespace(choices=[], usage=None)
 
 
+def usage_chunk():
+    return SimpleNamespace(
+        choices=[],
+        usage=SimpleNamespace(
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=120,
+            cached_tokens=60,
+            prompt_cache_miss_tokens=40,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=5),
+        ),
+    )
+
+
 def tool_chunk(call_id, name, arguments):
     return SimpleNamespace(
         choices=[SimpleNamespace(
@@ -63,6 +77,10 @@ class FakeClient:
         )
 
 
+def model_connection(client):
+    return SimpleNamespace(client=client, model_name="test-model")
+
+
 class BlockingResponse:
     def __init__(self, started):
         self.started = started
@@ -85,13 +103,17 @@ class ChatServiceTests(unittest.TestCase):
         )
         self.storage_patcher.start()
         self.addCleanup(self.storage_patcher.stop)
-        self.round_limit_patcher = patch.object(
+        self.app_settings_patcher = patch.object(
             chat_module,
-            "get_tool_round_limit",
-            return_value=100,
+            "get_app_settings",
+            return_value={
+                "tool_round_limit": 100,
+                "show_usage": True,
+                "model_provider": "siliconflow",
+            },
         )
-        self.round_limit_patcher.start()
-        self.addCleanup(self.round_limit_patcher.stop)
+        self.app_settings_patcher.start()
+        self.addCleanup(self.app_settings_patcher.stop)
 
     @staticmethod
     def print_success(message):
@@ -102,7 +124,7 @@ class ChatServiceTests(unittest.TestCase):
             [text_chunk("你好"), text_chunk("，读者")],
         ])
 
-        with patch.object(chat_module, "client", fake_client):
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
             events = list(service.stream_message(BOOK_ID, "normal", "请打招呼"))
 
@@ -115,6 +137,7 @@ class ChatServiceTests(unittest.TestCase):
             ["你好", "，读者"],
         )
         self.assertEqual(events[0].data["title"], "请打招呼")
+        self.assertEqual(fake_client.chat.completions.calls[0]["model"], "test-model")
 
         conversation = service._store.load_conversation("normal", BOOK_ID)
         self.assertIsNotNone(conversation)
@@ -124,6 +147,60 @@ class ChatServiceTests(unittest.TestCase):
         self.assertEqual(conversation.messages[-1].role, "assistant")
         self.assertEqual(conversation.messages[-1].content, "你好，读者")
         self.print_success("普通回答的事件顺序和消息保存正常")
+
+    def test_usage_setting_controls_usage_request_and_event(self):
+        enabled_client = FakeClient([[
+            text_chunk("开启"),
+            usage_chunk(),
+        ]])
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(enabled_client)):
+            enabled_service = chat_module.ChatService()
+            enabled_events = list(enabled_service.stream_message(
+                BOOK_ID,
+                "usage-enabled",
+                "显示用量",
+            ))
+
+        usage = next(event for event in enabled_events if event.event == "usage")
+        self.assertEqual(usage.data, {
+            "input": 100,
+            "output": 20,
+            "total": 120,
+            "cached_input": 60,
+            "cache_miss_input": 40,
+            "reasoning": 5,
+        })
+        self.assertEqual(
+            enabled_client.chat.completions.calls[0]["stream_options"],
+            {"include_usage": True},
+        )
+
+        disabled_client = FakeClient([[
+            text_chunk("关闭"),
+            usage_chunk(),
+        ]])
+        with (
+            patch.object(
+                chat_module,
+                "get_app_settings",
+                return_value={
+                    "tool_round_limit": 100,
+                    "show_usage": False,
+                    "model_provider": "siliconflow",
+                },
+            ),
+            patch.object(chat_module, "get_model_connection", return_value=model_connection(disabled_client)),
+        ):
+            disabled_service = chat_module.ChatService()
+            disabled_events = list(disabled_service.stream_message(
+                BOOK_ID,
+                "usage-disabled",
+                "隐藏用量",
+            ))
+
+        self.assertNotIn("usage", [event.event for event in disabled_events])
+        self.assertNotIn("stream_options", disabled_client.chat.completions.calls[0])
+        self.print_success("用量设置同时控制 API 请求和前端事件")
 
     def test_summary_setting_replaces_prompt_and_tools_for_existing_conversation(self):
         fake_client = FakeClient([
@@ -136,7 +213,7 @@ class ChatServiceTests(unittest.TestCase):
             return [{"type": "function", "function": {"name": name}} for name in names]
 
         with (
-            patch.object(chat_module, "client", fake_client),
+            patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)),
             patch.object(chat_module, "summary_enabled", side_effect=[False, True]),
             patch.object(
                 chat_module,
@@ -174,7 +251,7 @@ class ChatServiceTests(unittest.TestCase):
             return {"kind": "error", "message": "防剧透模式已开启"}
 
         with (
-            patch.object(chat_module, "client", fake_client),
+            patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)),
             patch.object(chat_module, "spoiler_chapter_limit", return_value=2),
             patch.object(
                 chat_module,
@@ -200,7 +277,7 @@ class ChatServiceTests(unittest.TestCase):
     def test_provider_error_does_not_emit_done(self):
         fake_client = FakeClient([RuntimeError("connection lost")])
 
-        with patch.object(chat_module, "client", fake_client):
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
             events = list(service.stream_message(BOOK_ID, "provider-error", "继续"))
 
@@ -220,7 +297,9 @@ class ChatServiceTests(unittest.TestCase):
             [conversation.id for conversation in service.get_conversations("book-1")],
             ["conversation-1"],
         )
-        events = list(service.stream_message("book-2", "conversation-1", "不会发送"))
+        fake_client = FakeClient([])
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
+            events = list(service.stream_message("book-2", "conversation-1", "不会发送"))
         self.assertEqual(events[0].event, "error")
         self.assertEqual(events[0].data["code"], "conversation_book_mismatch")
         self.print_success("会话创建后始终绑定原书籍")
@@ -231,7 +310,7 @@ class ChatServiceTests(unittest.TestCase):
             [text_chunk("第二次回答")],
         ])
 
-        with patch.object(chat_module, "client", fake_client):
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
             first_events = list(service.stream_message(
                 BOOK_ID,
@@ -266,7 +345,7 @@ class ChatServiceTests(unittest.TestCase):
                 "kind": "chapter_list",
                 "chapters": [{"chapter_id": 1, "title": "第一章"}],
             }},
-        ), patch.object(chat_module, "client", fake_client):
+        ), patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
             events = list(service.stream_message(BOOK_ID, "tool", "列出章节"))
 
@@ -294,15 +373,26 @@ class ChatServiceTests(unittest.TestCase):
         self.assertNotIn("display", stored_result)
         self.print_success("工具调用完成后可以继续生成最终回答")
 
-    def test_tool_round_limit_preserves_partial_answer_and_tool_result(self):
-        fake_client = FakeClient([[
-            text_chunk("先说明已经找到的部分。"),
-            tool_chunk("call-limit", "get_chapter_list", "{}"),
-            empty_chunk(),
-        ]])
+    def test_tool_round_limit_forces_a_final_answer_without_tools(self):
+        fake_client = FakeClient([
+            [
+                text_chunk("先说明已经找到的部分。"),
+                tool_chunk("call-limit", "get_chapter_list", "{}"),
+                empty_chunk(),
+            ],
+            [text_chunk("根据目前查到的内容，这是最终回答。")],
+        ])
 
         with (
-            patch.object(chat_module, "get_tool_round_limit", return_value=1),
+            patch.object(
+                chat_module,
+                "get_app_settings",
+                return_value={
+                    "tool_round_limit": 1,
+                    "show_usage": True,
+                    "model_provider": "siliconflow",
+                },
+            ),
             patch.object(
                 chat_module,
                 "AVAILABLE_TOOLS",
@@ -311,29 +401,44 @@ class ChatServiceTests(unittest.TestCase):
                     "chapters": [{"chapter_id": 1, "title": "第一章"}],
                 }},
             ),
-            patch.object(chat_module, "client", fake_client),
+            patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)),
         ):
             service = chat_module.ChatService()
             events = list(service.stream_message(BOOK_ID, "tool-limit", "继续查找"))
 
         self.assertEqual(
             [event.event for event in events],
-            ["message_start", "token", "tool_start", "tool_result", "error"],
+            ["message_start", "token", "tool_start", "tool_result", "token", "done"],
         )
-        self.assertEqual(events[-1].data["code"], "tool_round_limit")
-        self.assertNotIn("done", [event.event for event in events])
+        self.assertEqual(len(fake_client.chat.completions.calls), 2)
+        self.assertIn("tools", fake_client.chat.completions.calls[0])
+        self.assertNotIn("tools", fake_client.chat.completions.calls[1])
+        self.assertEqual(
+            fake_client.chat.completions.calls[1]["messages"][-2]["role"],
+            "tool",
+        )
+        self.assertEqual(
+            fake_client.chat.completions.calls[1]["messages"][-1],
+            {
+                "role": "system",
+                "content": "本轮回答已达工具调用次数上限：1 次。请根据已有信息直接回答用户。",
+            },
+        )
 
         stored = service._store.load_conversation("tool-limit", BOOK_ID)
         self.assertIsNotNone(stored)
-        assistant = next(
-            message
+        assistant_contents = [
+            message.content
             for message in stored.messages
             if message.role == "assistant" and message.content
-        )
+        ]
         tool_result = next(message for message in stored.messages if message.role == "tool")
-        self.assertEqual(assistant.content, "先说明已经找到的部分。")
+        self.assertEqual(assistant_contents, [
+            "先说明已经找到的部分。",
+            "根据目前查到的内容，这是最终回答。",
+        ])
         self.assertEqual(tool_result.tool_status, "completed")
-        self.print_success("达到工具轮数上限后仍保留部分回答和工具结果")
+        self.print_success("达到工具轮数上限后禁用工具并生成最终回答")
 
     def test_invalid_tool_arguments_return_tool_error_and_continue(self):
         fake_client = FakeClient([
@@ -341,7 +446,7 @@ class ChatServiceTests(unittest.TestCase):
             [text_chunk("我无法执行这个工具")],
         ])
 
-        with patch.object(chat_module, "client", fake_client):
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
             events = list(service.stream_message(BOOK_ID, "tool-error", "执行工具"))
 
@@ -359,7 +464,7 @@ class ChatServiceTests(unittest.TestCase):
         fake_client = FakeClient([BlockingResponse(started)])
         first_events = []
 
-        with patch.object(chat_module, "client", fake_client):
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
 
             worker = threading.Thread(
@@ -385,7 +490,7 @@ class ChatServiceTests(unittest.TestCase):
         fake_client = FakeClient([BlockingResponse(started)])
         events = []
 
-        with patch.object(chat_module, "client", fake_client):
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
 
             worker = threading.Thread(
@@ -412,7 +517,7 @@ class ChatServiceTests(unittest.TestCase):
         started = threading.Event()
         fake_client = FakeClient([BlockingResponse(started)])
 
-        with patch.object(chat_module, "client", fake_client):
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
             worker = threading.Thread(
                 target=lambda: list(
@@ -443,7 +548,7 @@ class ChatServiceTests(unittest.TestCase):
         first_events = []
         second_events = []
 
-        with patch.object(chat_module, "client", fake_client):
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
             service = chat_module.ChatService()
             first_worker = threading.Thread(
                 target=lambda: first_events.extend(

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from config import BOOKS_DIR, BookPaths
+from services.model_provider import ModelConnection, get_selected_model_connection
 from summaries import (
     generate_summary,
     plan_summary_targets,
@@ -111,6 +112,11 @@ class SummaryService:
     def start(self, book_id: str, targets: list[dict[str, Any]]) -> dict[str, Any]:
         book_path = self._require_book(book_id)
         plan = self.plan(book_id, targets)
+        model_connection = (
+            get_selected_model_connection()
+            if plan["total_calls"] > 0
+            else None
+        )
 
         with self._state_lock:
             state = read_summary_state(book_path)
@@ -134,20 +140,31 @@ class SummaryService:
             self._write_state(book_path, state)
 
         if not completed:
-            self._start_worker(book_id, plan["targets"])
+            self._start_worker(book_id, plan["targets"], model_connection)
         return job
 
-    def _start_worker(self, book_id: str, targets: list[dict[str, Any]]) -> None:
+    def _start_worker(
+        self,
+        book_id: str,
+        targets: list[dict[str, Any]],
+        model_connection: ModelConnection | None = None,
+    ) -> None:
         threading.Thread(
             target=self._run_job,
-            args=(book_id, targets),
+            args=(book_id, targets, model_connection),
             daemon=True,
             name=f"summary-{book_id}",
         ).start()
 
-    def _run_job(self, book_id: str, targets: list[dict[str, Any]]) -> None:
+    def _run_job(
+        self,
+        book_id: str,
+        targets: list[dict[str, Any]],
+        model_connection: ModelConnection | None = None,
+    ) -> None:
         book_path = BookPaths(book_id)
         try:
+            connection = model_connection or get_selected_model_connection()
             with self._worker_lock:
                 self._update_job(
                     book_path,
@@ -178,6 +195,7 @@ class SummaryService:
                         book_path,
                         target.get("start"),
                         on_progress,
+                        connection,
                     )
 
                 with self._state_lock:

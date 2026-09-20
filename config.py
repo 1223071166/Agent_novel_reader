@@ -1,19 +1,15 @@
-import os
 from pathlib import Path
 from dataclasses import dataclass
-from dotenv import load_dotenv
-from openai import OpenAI
 
 
-# Resolve paths from this file so execution does not depend on the current directory.
 PROJECT_ROOT = Path(__file__).resolve().parent
-load_dotenv(PROJECT_ROOT / ".env")
 
 # Project files and directories.
 DATA_DIR = PROJECT_ROOT / "data"
 BOOKS_DIR = DATA_DIR / "books"
 SELECTED_BOOK_FILE = DATA_DIR / "selected_book.txt"
 APP_SETTINGS_FILE = DATA_DIR / "app_settings.json"
+MODEL_CREDENTIALS_FILE = DATA_DIR / "model_credentials.json"
 DATABASE_DIR = DATA_DIR / "database"
 
 BOOK_ID = "shengweizhilv"
@@ -56,14 +52,6 @@ class BookPaths:
 
 VECTOR_COLLECTION_NAME = "novel"
 MESSAGE_STORAGE_FILE = DATABASE_DIR / "conversations.db"
-# API configuration.
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-API_BASE_URL = "https://api.siliconflow.cn/v1"
-MODEL = "deepseek-ai/DeepSeek-V4-Flash"
-client = OpenAI(api_key=OPENAI_API_KEY, base_url=API_BASE_URL)
-client_summary = client
-MODEL_summary = MODEL
-
 # Embedding and retrieval configuration.
 MODEL_NAME = "BAAI/bge-base-zh-v1.5"
 RERANKER_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
@@ -85,6 +73,3 @@ CHAPTER_SUMMARY_CHARS = 250
 MID_SUMMARY_CHARS = 1000
 BIG_SUMMARY_CHARS = 1000
 WHOLE_SUMMARY_CHARS = 4000
-
-# Main program switches.
-SHOW_USAGE = True

@@ -7,6 +7,7 @@ todo
 data/books/
 data/selected_book.txt
 data/app_settings.json
+data/model_credentials.json
 data/database/vector_db/
 data/database/conversations.db
 frontend/dist

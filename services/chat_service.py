@@ -5,12 +5,13 @@ import json
 import threading
 import uuid
 import copy
-from typing import Any, Iterator
+from typing import Any, Generator, Iterator
 
-from config import MODEL, SHOW_USAGE, MESSAGE_STORAGE_FILE, client, BookPaths
+from config import MESSAGE_STORAGE_FILE, BookPaths
 from novel_tools import AVAILABLE_TOOLS, NovelToolContext, build_tools, load_titles
 from prompts import get_system_prompt
-from services.app_settings import get_tool_round_limit
+from services.app_settings import get_app_settings
+from services.model_provider import ModelConnection, get_model_connection
 from services.reading_service import spoiler_chapter_limit
 from services.summary_service import summary_enabled
 from usage_stats import get_field, read_usage
@@ -112,7 +113,10 @@ class ChatService:
         user_content: str,
     ) -> Iterator[ChatEvent]:
         try:
-            tool_round_limit = get_tool_round_limit()
+            app_settings = get_app_settings()
+            tool_round_limit = int(app_settings["tool_round_limit"])
+            show_usage = bool(app_settings["show_usage"])
+            model_connection = get_model_connection(str(app_settings["model_provider"]))
         except ValueError as exc:
             yield ChatEvent("error", {
                 "code": "invalid_app_settings",
@@ -174,6 +178,8 @@ class ChatService:
                 use_summary_tool,
                 max_chapter,
                 tool_round_limit,
+                show_usage,
+                model_connection,
             ):
                 yield event
                 has_error = has_error or event.event == "error"
@@ -195,6 +201,8 @@ class ChatService:
         use_summary_tool: bool,
         max_chapter: int | None,
         tool_round_limit: int,
+        show_usage: bool,
+        model_connection: ModelConnection,
     ) -> Iterator[ChatEvent]:
         tool_context = NovelToolContext(book_path, max_chapter)
         tools = build_tools(use_summary_tool)
@@ -203,102 +211,17 @@ class ChatService:
             for tool in tools
         }
         for round_index in range(1, tool_round_limit + 1):
-            if cancel_event.is_set():
-                yield ChatEvent("error", {
-                "code": "user_interreption",
-                "message": "用户终止了这条回答",
-                })
-                return
-            request_args: dict[str, Any] = {
-                "model": MODEL,
-                "messages": self._messages_for_request(
-                    conversation_id,
-                    use_summary_tool,
-                    max_chapter,
-                ),
-                "tools": tools,
-                "stream": True,
-            }
-            if SHOW_USAGE:
-                request_args["stream_options"] = {"include_usage": True}
-
-            try:
-                response = client.chat.completions.create(**request_args)
-            except Exception as exc:
-                yield ChatEvent("error", {
-                    "code": "provider_error",
-                    "message": str(exc),
-                })
-                return
-
-            full_content = ""
-            tool_calls: list[dict[str, Any]] = []
-            current_usage: dict[str, int] | None = None
-
-            try:
-                for chunk in response:
-                    if cancel_event.is_set():
-                        self._append_message(conversation_id, Message(
-                            id=str(uuid.uuid4()),
-                            role="assistant",
-                            content=full_content or None,
-                        ))
-                        yield ChatEvent("error", {
-                        "code": "user_interreption",
-                        "message": "用户终止了这条回答",
-                        })
-                        return
-                    if SHOW_USAGE:
-                        usage = get_field(chunk, "usage")
-                        if usage is not None:
-                            current_usage = read_usage(usage)
-
-                    if not getattr(chunk, "choices", None):
-                        continue
-                    delta = chunk.choices[0].delta
-                    if not delta:
-                        continue
-
-                    if delta.content:
-                        full_content += delta.content
-                        yield ChatEvent("token", {"content": delta.content})
-
-                    if delta.tool_calls:
-                        for tool_call in delta.tool_calls:
-                            index = tool_call.index
-                            while len(tool_calls) <= index:
-                                tool_calls.append({
-                                    "id": "",
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""},
-                                })
-                            slot = tool_calls[index]
-                            if tool_call.id:
-                                slot["id"] = tool_call.id
-                            if tool_call.function:
-                                if tool_call.function.name:
-                                    slot["function"]["name"] = tool_call.function.name
-                                if tool_call.function.arguments:
-                                    slot["function"]["arguments"] += tool_call.function.arguments
-            except Exception as exc:
-                yield ChatEvent("error", {
-                    "code": "provider_stream_error",
-                    "message": str(exc),
-                })
-                return
-
-            if current_usage is not None:
-                yield ChatEvent("usage", current_usage)
-
-            assistant_message = Message(
-                id=str(uuid.uuid4()),
-                role="assistant",
-                content=full_content or None,
+            completed, tool_calls = yield from self._stream_model_round(
+                conversation_id,
+                cancel_event,
+                use_summary_tool,
+                max_chapter,
+                tools,
+                show_usage,
+                model_connection,
             )
-            if tool_calls:
-                assistant_message.tool_calls = tool_calls
-            self._append_message(conversation_id, assistant_message)
-
+            if not completed:
+                return
             if not tool_calls:
                 return
 
@@ -311,10 +234,130 @@ class ChatService:
                     tool_context,
                 )
 
-        yield ChatEvent("error", {
-            "code": "tool_round_limit",
-            "message": f"工具调用超过最大轮数 {tool_round_limit}",
-        })
+        yield from self._stream_model_round(
+            conversation_id,
+            cancel_event,
+            use_summary_tool,
+            max_chapter,
+            None,
+            show_usage,
+            model_connection,
+            f"本轮回答已达工具调用次数上限：{tool_round_limit} 次。请根据已有信息直接回答用户。",
+        )
+
+    def _stream_model_round(
+        self,
+        conversation_id: str,
+        cancel_event: threading.Event,
+        use_summary_tool: bool,
+        max_chapter: int | None,
+        tools: list[dict[str, Any]] | None,
+        show_usage: bool,
+        model_connection: ModelConnection,
+        final_instruction: str | None = None,
+    ) -> Generator[ChatEvent, None, tuple[bool, list[dict[str, Any]]]]:
+        if cancel_event.is_set():
+            yield ChatEvent("error", {
+                "code": "user_interreption",
+                "message": "用户终止了这条回答",
+            })
+            return False, []
+
+        messages = self._messages_for_request(
+            conversation_id,
+            use_summary_tool,
+            max_chapter,
+        )
+        if final_instruction is not None:
+            messages.append({"role": "system", "content": final_instruction})
+
+        request_args: dict[str, Any] = {
+            "model": model_connection.model_name,
+            "messages": messages,
+            "stream": True,
+        }
+        if tools is not None:
+            request_args["tools"] = tools
+        if show_usage:
+            request_args["stream_options"] = {"include_usage": True}
+
+        try:
+            response = model_connection.client.chat.completions.create(**request_args)
+        except Exception as exc:
+            yield ChatEvent("error", {
+                "code": "provider_error",
+                "message": str(exc),
+            })
+            return False, []
+
+        full_content = ""
+        tool_calls: list[dict[str, Any]] = []
+        current_usage: dict[str, int] | None = None
+
+        try:
+            for chunk in response:
+                if cancel_event.is_set():
+                    self._append_message(conversation_id, Message(
+                        id=str(uuid.uuid4()),
+                        role="assistant",
+                        content=full_content or None,
+                    ))
+                    yield ChatEvent("error", {
+                        "code": "user_interreption",
+                        "message": "用户终止了这条回答",
+                    })
+                    return False, []
+                if show_usage:
+                    usage = get_field(chunk, "usage")
+                    if usage is not None:
+                        current_usage = read_usage(usage)
+
+                if not getattr(chunk, "choices", None):
+                    continue
+                delta = chunk.choices[0].delta
+                if not delta:
+                    continue
+
+                if delta.content:
+                    full_content += delta.content
+                    yield ChatEvent("token", {"content": delta.content})
+
+                if tools is not None and delta.tool_calls:
+                    for tool_call in delta.tool_calls:
+                        index = tool_call.index
+                        while len(tool_calls) <= index:
+                            tool_calls.append({
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            })
+                        slot = tool_calls[index]
+                        if tool_call.id:
+                            slot["id"] = tool_call.id
+                        if tool_call.function:
+                            if tool_call.function.name:
+                                slot["function"]["name"] = tool_call.function.name
+                            if tool_call.function.arguments:
+                                slot["function"]["arguments"] += tool_call.function.arguments
+        except Exception as exc:
+            yield ChatEvent("error", {
+                "code": "provider_stream_error",
+                "message": str(exc),
+            })
+            return False, []
+
+        if current_usage is not None:
+            yield ChatEvent("usage", current_usage)
+
+        assistant_message = Message(
+            id=str(uuid.uuid4()),
+            role="assistant",
+            content=full_content or None,
+        )
+        if tool_calls:
+            assistant_message.tool_calls = tool_calls
+        self._append_message(conversation_id, assistant_message)
+        return True, tool_calls
 
     def _execute_tool(
         self,

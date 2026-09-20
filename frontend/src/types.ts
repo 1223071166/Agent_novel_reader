@@ -103,6 +103,25 @@ export type ReadingSettings = {
 
 export type AppSettings = {
   tool_round_limit: number;
+  show_usage: boolean;
+  model_provider: "siliconflow" | "custom";
+  siliconflow: ModelProviderSettings;
+  custom: ModelProviderSettings;
+};
+
+export type ModelProviderSettings = {
+  base_url: string;
+  model_name: string;
+  has_api_key: boolean;
+};
+
+export type TokenUsage = {
+  input: number;
+  output: number;
+  total: number;
+  cached_input: number;
+  cache_miss_input: number;
+  reasoning: number;
 };
 
 // 前端运行期间使用的状态类型
@@ -140,6 +159,7 @@ export type FrontendConversation = {
   messages: TimelineItem[];
   draft: string;
   error: string;
+  usage: TokenUsage | null;
 };
 
 export type BookWorkspace = {

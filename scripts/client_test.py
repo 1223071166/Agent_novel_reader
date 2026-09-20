@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from config import MODEL, client
+from services.model_provider import get_selected_model_connection
 
 
 def get_field(value: Any, name: str, default: Any = None) -> Any:
@@ -61,6 +61,7 @@ def print_usage(label: str, usage: dict[str, int]) -> None:
 
 
 def main() -> None:
+    connection = get_selected_model_connection()
     messages: list[dict[str, str]] = []
     cumulative = {
         "input": 0,
@@ -70,7 +71,7 @@ def main() -> None:
         "reasoning": 0,
     }
 
-    print(f"Model: {MODEL}")
+    print(f"Model: {connection.model_name}")
     print("输入 exit 或 quit 退出。")
 
     while True:
@@ -91,8 +92,8 @@ def main() -> None:
         print("[assistant]: ", end="", flush=True)
 
         try:
-            response = client.chat.completions.create(
-                model=MODEL,
+            response = connection.client.chat.completions.create(
+                model=connection.model_name,
                 messages=messages,
                 stream=True,
                 # Ask the compatible endpoint to send usage in the final frame.

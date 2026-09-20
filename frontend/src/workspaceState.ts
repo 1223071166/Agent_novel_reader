@@ -18,6 +18,7 @@ export const makeConversation = (): FrontendConversation => ({
   messages: [],
   draft: "",
   error: "",
+  usage: null,
 });
 
 const conversationFromResponse = (conversation: Conversation): FrontendConversation => ({
@@ -26,6 +27,7 @@ const conversationFromResponse = (conversation: Conversation): FrontendConversat
   messages: timelineFromConversation(conversation),
   draft: "",
   error: "",
+  usage: null,
 });
 
 export const makeWorkspace = (

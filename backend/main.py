@@ -1,15 +1,16 @@
 import json
 import uuid
-from typing import Iterator
+from typing import Iterator, Literal
 from urllib.parse import unquote
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, StrictBool, StrictInt
+from pydantic import BaseModel, Field, StrictBool, StrictInt
 
 from services.chat_service import ChatService
 from services.app_settings import get_app_settings, save_app_settings
+from services.model_provider import get_model_settings, save_model_settings
 from services.book_import_service import BookImportService, IMPORT_STATE_FILE
 from services.summary_service import SummaryService
 from services.reading_service import get_reading_settings, save_reading_settings
@@ -63,7 +64,13 @@ class ReadingSettingsRequest(BaseModel):
 
 
 class AppSettingsRequest(BaseModel):
-    tool_round_limit: StrictInt
+    tool_round_limit: StrictInt = Field(ge=1, le=100)
+    show_usage: StrictBool
+    model_provider: Literal["siliconflow", "custom"]
+    siliconflow_api_key: str | None = None
+    custom_base_url: str = ""
+    custom_model_name: str = ""
+    custom_api_key: str | None = None
 
 
 class SummaryTargetRequest(BaseModel):
@@ -85,7 +92,11 @@ def _summary_targets(request: SummaryTargetsRequest) -> list[dict]:
 @app.get("/api/settings")
 def load_app_settings():
     try:
-        return get_app_settings()
+        settings = get_app_settings()
+        return {
+            **settings,
+            **get_model_settings(str(settings["model_provider"])),
+        }
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -93,7 +104,22 @@ def load_app_settings():
 @app.put("/api/settings")
 def update_app_settings(request: AppSettingsRequest):
     try:
-        return save_app_settings(request.tool_round_limit)
+        save_model_settings(
+            request.model_provider,
+            request.siliconflow_api_key,
+            request.custom_base_url,
+            request.custom_model_name,
+            request.custom_api_key,
+        )
+        settings = save_app_settings(
+            request.tool_round_limit,
+            request.show_usage,
+            request.model_provider,
+        )
+        return {
+            **settings,
+            **get_model_settings(request.model_provider),
+        }
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -16,6 +16,7 @@ const workspace: BookWorkspace = {
       messages: [],
       draft: "对话一的草稿",
       error: "",
+      usage: null,
     },
     {
       id: "conversation-2",
@@ -23,6 +24,7 @@ const workspace: BookWorkspace = {
       messages: [],
       draft: "对话二的草稿",
       error: "原有错误",
+      usage: null,
     },
   ],
 };

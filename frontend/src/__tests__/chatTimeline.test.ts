@@ -1,11 +1,40 @@
 import { describe, expect, it } from "vitest";
 import {
+  addTokenUsage,
   applyChatEvent,
   timelineFromConversation,
 } from "../chatTimeline";
 import type { Conversation } from "../types";
 
 describe("chat timeline", () => {
+  it("accumulates usage from every model call in one answer", () => {
+    const first = addTokenUsage(null, {
+      input: 100,
+      output: 20,
+      total: 120,
+      cached_input: 60,
+      cache_miss_input: 40,
+      reasoning: 5,
+    });
+    const total = addTokenUsage(first, {
+      input: 80,
+      output: 10,
+      total: 90,
+      cached_input: 50,
+      cache_miss_input: 30,
+      reasoning: 2,
+    });
+
+    expect(total).toEqual({
+      input: 180,
+      output: 30,
+      total: 210,
+      cached_input: 110,
+      cache_miss_input: 70,
+      reasoning: 7,
+    });
+  });
+
   it("can restore saved user, tool, and assistant messages", () => {
     const conversation: Conversation = {
       id: "conversation-1",

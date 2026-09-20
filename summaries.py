@@ -15,9 +15,8 @@ from config import (
     MID_SUMMARY_CHARS,
     WHOLE_SUMMARY_CHARS,
     BookPaths,
-    client_summary,
-    MODEL_summary,
 )
+from services.model_provider import ModelConnection, get_selected_model_connection
 
 # 多线程下保证 print 不互相打断
 _print_lock=threading.Lock()
@@ -114,13 +113,15 @@ def _summarize(
     user_text,
     on_progress: SummaryProgressCallback | None = None,
     label: str = "正在生成总结",
+    model_connection: ModelConnection | None = None,
 ):
     """用独立的临时 messages 调用摘要模型"""
+    connection = model_connection or get_selected_model_connection()
     for attempt in range(1, MAX_EMPTY_SUMMARY_ATTEMPTS + 1):
         if on_progress is not None:
             on_progress("start", label)
-        response = client_summary.chat.completions.create(
-            model=MODEL_summary,
+        response = connection.client.chat.completions.create(
+            model=connection.model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text}
@@ -157,6 +158,7 @@ def _summarize_chapter(
     chapter_id,
     text,
     on_progress: SummaryProgressCallback | None = None,
+    model_connection: ModelConnection | None = None,
 ):
     system=(
         f"你是小说摘要器。请把下面这一章的内容压缩成约 {CHAPTER_SUMMARY_CHARS} 字的中文情节摘要，"
@@ -167,6 +169,7 @@ def _summarize_chapter(
         f"第 {chapter_id} 章正文：\n{text}",
         on_progress,
         f"正在生成第 {chapter_id} 章摘要",
+        model_connection,
     )
 
 
@@ -174,6 +177,7 @@ def _ensure_chapter_summary(
     chapter_id,
     book_path: BookPaths,
     on_progress: SummaryProgressCallback | None = None,
+    model_connection: ModelConnection | None = None,
 ):
     """生成或复用单章摘要。已落盘则直接读，否则现场生成并落盘。
     返回 (chapter_id, 摘要文本 或 None)。None 表示该章不存在或生成失败。"""
@@ -188,7 +192,7 @@ def _ensure_chapter_summary(
 
     _log(f"正在生成第 {chapter_id} 章总结......")
     try:
-        summary=_summarize_chapter(chapter_id,text,on_progress)
+        summary=_summarize_chapter(chapter_id,text,on_progress,model_connection)
     except Exception as e:
         _log(f"第 {chapter_id} 章总结生成失败：{e}")
         return chapter_id,None
@@ -203,6 +207,7 @@ def _combine(
     parts,
     on_progress: SummaryProgressCallback | None = None,
     label: str = "正在合并总结",
+    model_connection: ModelConnection | None = None,
 ):
     """parts 是若干 (标签, 文本) 段落，拼接后交给模型合并。"""
     if not parts:
@@ -211,7 +216,7 @@ def _combine(
         f"【{part_label}】\n{content}"
         for part_label,content in parts
     )
-    return _summarize(system_prompt,joined,on_progress,label)
+    return _summarize(system_prompt,joined,on_progress,label,model_connection)
 
 
 # ---------- 生成：mid / big / whole ----------
@@ -220,6 +225,7 @@ def build_mid(
     start,
     book_path: BookPaths,
     on_progress: SummaryProgressCallback | None = None,
+    model_connection: ModelConnection | None = None,
 ):
     """生成一个 mid 块总结（先章后合）。返回 (成品文本, 是否新建)。"""
     name=block_name("mid", start, MID_SIZE, book_path)
@@ -234,7 +240,13 @@ def build_mid(
     results={}
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures={
-            executor.submit(_ensure_chapter_summary,cid,book_path,on_progress):cid
+            executor.submit(
+                _ensure_chapter_summary,
+                cid,
+                book_path,
+                on_progress,
+                model_connection,
+            ):cid
             for cid in range(s,e+1)
         }
         for future in as_completed(futures):
@@ -263,6 +275,7 @@ def build_mid(
         chapter_summaries,
         on_progress,
         f"正在合并第 {s}-{e} 章摘要",
+        model_connection,
     )
     _write_summary(path,content)
     return content,True
@@ -272,6 +285,7 @@ def build_big(
     start,
     book_path: BookPaths,
     on_progress: SummaryProgressCallback | None = None,
+    model_connection: ModelConnection | None = None,
 ):
     """生成一个 big 块总结，缺失的 mid 自动递归生成。返回 (成品文本, 是否新建)。"""
     name=block_name("big", start, BIG_SIZE, book_path)
@@ -284,7 +298,7 @@ def build_big(
 
     mid_parts=[]
     for mstart in range(s,e+1,MID_SIZE):
-        mcontent,_=build_mid(mstart, book_path, on_progress)
+        mcontent,_=build_mid(mstart, book_path, on_progress, model_connection)
         ms,me=block_range(mstart, MID_SIZE, book_path)
         mid_parts.append((f"第{ms}-{me}章",mcontent))
 
@@ -297,6 +311,7 @@ def build_big(
         mid_parts,
         on_progress,
         f"正在合并第 {s}-{e} 章大段总结",
+        model_connection,
     )
     _write_summary(path,content)
     return content,True
@@ -305,6 +320,7 @@ def build_big(
 def build_whole(
     book_path: BookPaths,
     on_progress: SummaryProgressCallback | None = None,
+    model_connection: ModelConnection | None = None,
 ):
     """生成全书总结，缺失的 big（连带 mid）自动递归生成。返回 (成品文本, 是否新建)。"""
     path=_summary_path(WHOLE_NAME, book_path)
@@ -314,7 +330,7 @@ def build_whole(
 
     big_parts=[]
     for bstart in big_starts(book_path):
-        bcontent,_=build_big(bstart, book_path, on_progress)
+        bcontent,_=build_big(bstart, book_path, on_progress, model_connection)
         bs,be=block_range(bstart, BIG_SIZE, book_path)
         big_parts.append((f"第{bs}-{be}章",bcontent))
 
@@ -322,7 +338,13 @@ def build_whole(
         f"你是小说摘要器。下面是全书各大段的总结，请合并成一篇约 {WHOLE_SUMMARY_CHARS} 字的"
         "完整中文剧情总结，梳理全书主线、主要人物和关键转折，不要使用markdown格式。"
     )
-    content=_combine(system,big_parts,on_progress,"正在合并全书总结")
+    content=_combine(
+        system,
+        big_parts,
+        on_progress,
+        "正在合并全书总结",
+        model_connection,
+    )
     _write_summary(path,content)
     return content,True
 
@@ -334,10 +356,12 @@ def generate_summary(
     book_path: BookPaths,
     start=None,
     on_progress: SummaryProgressCallback | None = None,
+    model_connection: ModelConnection | None = None,
 ):
     """人类手动生成。返回给终端打印的状态文本。"""
+    connection = model_connection or get_selected_model_connection()
     if level=="whole":
-        _,created=build_whole(book_path,on_progress)
+        _,created=build_whole(book_path,on_progress,connection)
         if created:
             return "已生成全书总结 whole.txt"
         return "whole.txt 已存在，如需重建请先删除该文件"
@@ -351,7 +375,7 @@ def generate_summary(
         name=block_name("mid", start, MID_SIZE, book_path)
         if _read_summary(_summary_path(name, book_path)) is not None:
             return f"{name} 已存在，如需重建请先删除该文件"
-        _,created=build_mid(start, book_path,on_progress)
+        _,created=build_mid(start, book_path,on_progress,connection)
         return f"已生成 {name}"
 
     if level=="big":
@@ -360,7 +384,7 @@ def generate_summary(
         name=block_name("big", start, BIG_SIZE, book_path)
         if _read_summary(_summary_path(name, book_path)) is not None:
             return f"{name} 已存在，如需重建请先删除该文件"
-        _,created=build_big(start, book_path,on_progress)
+        _,created=build_big(start, book_path,on_progress,connection)
         return f"已生成 {name}"
 
     return f"未知的总结层级：{level}（可用：mid / big / whole）"

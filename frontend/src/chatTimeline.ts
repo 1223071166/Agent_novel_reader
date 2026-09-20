@@ -2,11 +2,31 @@ import type {
   ChatEvent,
   Conversation,
   TimelineItem,
+  TokenUsage,
   ToolResult,
   ToolStatus,
 } from "./types";
 
 const newId = () => crypto.randomUUID();
+
+const usageFields: Array<keyof TokenUsage> = [
+  "input",
+  "output",
+  "total",
+  "cached_input",
+  "cache_miss_input",
+  "reasoning",
+];
+
+export function addTokenUsage(
+  current: TokenUsage | null,
+  data: Record<string, unknown>,
+): TokenUsage {
+  return Object.fromEntries(usageFields.map((field) => [
+    field,
+    (current?.[field] ?? 0) + (typeof data[field] === "number" ? data[field] : 0),
+  ])) as TokenUsage;
+}
 
 export function timelineFromConversation(conversation: Conversation): TimelineItem[] {
   const items: TimelineItem[] = [];
