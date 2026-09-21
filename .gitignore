@@ -1,5 +1,7 @@
 __pycache__/
 .env
+
+frontend/.vite
 frontend/node_modules/
 todo
 
