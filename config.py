@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -5,7 +6,9 @@ from dataclasses import dataclass
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 # Project files and directories.
-DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR = Path(
+    os.environ.get("AGENTREADER_DATA_DIR", str(PROJECT_ROOT / "data"))
+).expanduser().resolve()
 BOOKS_DIR = DATA_DIR / "books"
 SELECTED_BOOK_FILE = DATA_DIR / "selected_book.txt"
 APP_SETTINGS_FILE = DATA_DIR / "app_settings.json"

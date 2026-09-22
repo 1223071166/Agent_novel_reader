@@ -1,5 +1,8 @@
 __pycache__/
 .env
+.venv-build/
+build/
+dist/
 
 frontend/.vite
 frontend/node_modules/
