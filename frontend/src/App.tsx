@@ -4,6 +4,7 @@ import {
   addTokenUsage,
   applyChatEvent,
   appendUserItem,
+  removeUnsentMessage,
 } from "./chatTimeline";
 import BookImporter from "./BookImporter";
 import SettingsDialog from "./SettingsDialog";
@@ -172,7 +173,7 @@ function App() {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [bookId, importingBookIds]);
+  }, [bookId, importingBookIds, bookImporterTarget]);
 
   const conversations = workspace?.conversations ?? [];
   const activeConversation = workspace?.conversations.find(
@@ -340,16 +341,32 @@ function App() {
       { bookId: requestBookId, conversationId, stopping: false },
     ]);
     setAppError("");
+    let messageStarted = false;
+    let rejectedBeforeStart = false;
     try {
       await streamChat(requestBookId, conversationId, text, ({ event, data }) => {
         if (event === "error") {
+          rejectedBeforeStart = !messageStarted;
           throw new Error(String(data.message ?? "聊天请求失败"));
         }
+        if (event === "message_start") messageStarted = true;
         applyEventToConversation(requestBookId, conversationId, { event, data });
       });
     } catch (requestError) {
       const message = requestError instanceof Error ? requestError.message : "聊天请求失败";
-      setConversationError(requestBookId, conversationId, message);
+      setWorkspace((previous) => updateConversationInWorkspace(
+        previous,
+        requestBookId,
+        conversationId,
+        (conversation) => ({
+          ...conversation,
+          messages: rejectedBeforeStart
+            ? removeUnsentMessage(conversation.messages, text)
+            : conversation.messages,
+          draft: rejectedBeforeStart ? text : conversation.draft,
+          error: message,
+        }),
+      ));
     } finally {
       setRunningRequests((previous) => previous.filter((request) => (
         request.bookId !== requestBookId || request.conversationId !== conversationId

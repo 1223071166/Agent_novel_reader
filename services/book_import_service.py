@@ -268,16 +268,20 @@ class BookImportService:
     @staticmethod
     def _building_dir(book_id: str) -> Path:
         vector_root = DATABASE_DIR / "vector_db"
+        current = vector_root / f".building-{book_id}"
+        if current.exists():
+            return current
         existing = sorted(vector_root.glob(f".building-{book_id}-*"))
         if existing:
             return existing[0]
-        return vector_root / f".building-{book_id}"
+        return current
 
     @staticmethod
     def _remove_building_dirs(book_id: str) -> None:
         vector_root = DATABASE_DIR / "vector_db"
         if not vector_root.exists():
             return
+        shutil.rmtree(vector_root / f".building-{book_id}", ignore_errors=True)
         for path in vector_root.glob(f".building-{book_id}-*"):
             shutil.rmtree(path, ignore_errors=True)
 

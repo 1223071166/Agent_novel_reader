@@ -1,4 +1,4 @@
-"""Conversation orchestration shared by the CLI and FastAPI."""
+"""Conversation orchestration for the FastAPI chat endpoint."""
 
 from __future__ import annotations
 import json
@@ -50,9 +50,6 @@ class ChatService:
             for conversation_id in self._conversations
         }
         self._conversations_lock = threading.Lock()
-
-    def tools_for_book(self, book_id: str) -> list[dict[str, Any]]:
-        return build_tools(summary_enabled(book_id))
 
     def create_conversation(
         self,
@@ -340,6 +337,12 @@ class ChatService:
                             if tool_call.function.arguments:
                                 slot["function"]["arguments"] += tool_call.function.arguments
         except Exception as exc:
+            if full_content:
+                self._append_message(conversation_id, Message(
+                    id=str(uuid.uuid4()),
+                    role="assistant",
+                    content=full_content,
+                ))
             yield ChatEvent("error", {
                 "code": "provider_stream_error",
                 "message": str(exc),

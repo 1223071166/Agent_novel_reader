@@ -79,6 +79,15 @@ export function appendUserItem(items: TimelineItem[], content: string): Timeline
   ];
 }
 
+export function removeUnsentMessage(items: TimelineItem[], content: string): TimelineItem[] {
+  const user = items[items.length - 2];
+  const assistant = items[items.length - 1];
+  return user?.type === "user" && user.content === content
+    && assistant?.type === "assistant" && assistant.content === ""
+    ? items.slice(0, -2)
+    : items;
+}
+
 export function applyChatEvent(items: TimelineItem[], { event, data }: ChatEvent): TimelineItem[] {
   if (event === "token") {
     const content = String(data.content ?? "");

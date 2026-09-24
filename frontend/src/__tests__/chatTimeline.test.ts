@@ -2,11 +2,21 @@ import { describe, expect, it } from "vitest";
 import {
   addTokenUsage,
   applyChatEvent,
+  appendUserItem,
+  removeUnsentMessage,
   timelineFromConversation,
 } from "../chatTimeline";
 import type { Conversation } from "../types";
 
 describe("chat timeline", () => {
+  it("removes an unacknowledged send without deleting earlier messages", () => {
+    const previous = [{ id: "earlier", type: "assistant" as const, content: "早些内容" }];
+    const pending = appendUserItem(previous, "请回答");
+
+    expect(removeUnsentMessage(pending, "请回答")).toEqual(previous);
+    expect(removeUnsentMessage(pending, "另一句话")).toEqual(pending);
+  });
+
   it("accumulates usage from every model call in one answer", () => {
     const first = addTokenUsage(null, {
       input: 100,

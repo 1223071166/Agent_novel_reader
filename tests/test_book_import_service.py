@@ -82,8 +82,11 @@ class BookImportServiceTests(unittest.TestCase):
                     "第1章 开始\n这里是正文".encode("utf-8"),
                 )
                 discarded_root = books_dir / discarded["book_id"]
+                partial_dir = database_dir / "vector_db" / f".building-{discarded['book_id']}"
+                partial_dir.mkdir()
                 service.discard_import(discarded["book_id"])
                 self.assertFalse(discarded_root.exists())
+                self.assertFalse(partial_dir.exists())
 
     def test_running_import_keeps_partial_vectors_for_resume_after_restart(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

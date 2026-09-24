@@ -155,11 +155,19 @@ def get_chapters(chapter_ids: list[int], context: NovelToolContext) -> ToolResul
     }
 
 
-def iter_chapters(context: NovelToolContext):
+def iter_chapters(
+    context: NovelToolContext,
+    start_chapter: int | None = None,
+    end_chapter: int | None = None,
+):
     """按章节号顺序遍历全书，按需读取（利用 read_chapter 的缓存）。"""
     for chapter_id in sorted(load_titles(context.book_path)):
-        if not _chapter_allowed(context, chapter_id):
+        if start_chapter is not None and chapter_id < start_chapter:
             continue
+        if end_chapter is not None and chapter_id > end_chapter:
+            break
+        if not _chapter_allowed(context, chapter_id):
+            break
         chapter=read_chapter(chapter_id, context.book_path)
         if chapter is not None:
             yield chapter_id, chapter
@@ -202,11 +210,7 @@ def search_keyword(
     matches = []
     returned_contexts = 0
     truncated = False
-    for matched_chapter_id, chapter in iter_chapters(context):
-        if start_chapter is not None and matched_chapter_id < start_chapter:
-            continue
-        if effective_end is not None and matched_chapter_id > effective_end:
-            break
+    for matched_chapter_id, chapter in iter_chapters(context, start_chapter, effective_end):
         text = chapter["content"]
         count = text.count(keyword)
         if count == 0:

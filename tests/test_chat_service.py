@@ -7,10 +7,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import config
 import services.chat_service as chat_module
 
 
-TEST_BOOK_ID = "shengweizhilv"
+TEST_BOOK_ID = "test-book"
 
 
 def text_chunk(content):
@@ -98,6 +99,24 @@ class ChatServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
+        books_dir = Path(self.temp_dir.name) / "books"
+        book_root = books_dir / TEST_BOOK_ID
+        chapter_dir = book_root / "chapters"
+        chapter_dir.mkdir(parents=True)
+        (book_root / "name.txt").write_text("测试小说\n", encoding="utf-8")
+        (book_root / "info.txt").write_text("测试用简介\n", encoding="utf-8")
+        (book_root / "chapters.txt").write_text(
+            "1，第一章\n2，第二章\n3，第三章",
+            encoding="utf-8",
+        )
+        for chapter_id in range(1, 4):
+            (chapter_dir / f"{chapter_id}.txt").write_text(
+                f"第 {chapter_id} 章正文",
+                encoding="utf-8",
+            )
+        books_patcher = patch.object(config, "BOOKS_DIR", books_dir)
+        books_patcher.start()
+        self.addCleanup(books_patcher.stop)
         self.storage_patcher = patch.object(
             chat_module,
             "MESSAGE_STORAGE_FILE",
@@ -288,6 +307,22 @@ class ChatServiceTests(unittest.TestCase):
         self.assertNotIn("done", [event.event for event in events])
         self.assertEqual(service._store.load_conversation("provider-error", TEST_BOOK_ID).messages[-1].role, "user")
         self.print_success("模型请求失败时会返回 error 且不会发送 done")
+
+    def test_stream_error_keeps_answer_already_shown_to_user(self):
+        def broken_response():
+            yield text_chunk("已经生成的回答")
+            raise RuntimeError("stream disconnected")
+
+        fake_client = FakeClient([broken_response()])
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
+            service = chat_module.ChatService()
+            events = list(service.stream_message(TEST_BOOK_ID, "partial-answer", "请回答"))
+
+        self.assertEqual([event.event for event in events], ["message_start", "token", "error"])
+        self.assertEqual(events[-1].data["code"], "provider_stream_error")
+        stored = service._store.load_conversation("partial-answer", TEST_BOOK_ID)
+        self.assertEqual(stored.messages[-1].role, "assistant")
+        self.assertEqual(stored.messages[-1].content, "已经生成的回答")
 
     def test_conversations_stay_bound_to_their_book(self):
         service = chat_module.ChatService()
