@@ -33,9 +33,7 @@ function defaultName(filename: string): string {
   return filename.replace(/\.txt$/i, "");
 }
 
-function defaultInfo(): string {
-  return "作者：\n类型：\n主要人物：\n简介：";
-}
+
 
 export default function BookImporter({
   initialBookId,
@@ -78,7 +76,7 @@ export default function BookImporter({
       setBookId(resumeBookId);
       setChapterCount(current.chapter_count ?? 0);
       setName(current.name || defaultName(current.original_name ?? resumeBookId));
-      setInfo(current.info || defaultInfo());
+      setInfo(current.info || "");
 
       if (current.status === "completed") {
         await onImported(resumeBookId);
@@ -150,7 +148,7 @@ export default function BookImporter({
       setChapterCount(result.chapter_count ?? 0);
       const importedName = result.name || defaultName(file.name);
       setName(importedName);
-      setInfo(defaultInfo());
+      setInfo("");
       setStep("info");
       onImportCreated(result.book_id, importedName);
     } catch (requestError) {

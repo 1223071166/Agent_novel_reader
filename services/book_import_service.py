@@ -99,9 +99,7 @@ class BookImportService:
 
             state.update({
                 "status": "pending",
-                "processed": 0,
-                "total": 0,
-                "message": "向量化任务正在等待执行",
+                "message": "向量化任务正在等待继续",
                 "error": None,
             })
             self._save_state(book_path, state)
@@ -162,11 +160,7 @@ class BookImportService:
             self._states.pop(book_id, None)
 
     def _run_embedding(self, book_path: BookPaths) -> None:
-        temporary_dir = (
-            DATABASE_DIR
-            / "vector_db"
-            / f".building-{book_path.book_id}-{uuid.uuid4().hex[:8]}"
-        )
+        temporary_dir = self._building_dir(book_path.book_id)
         try:
             with self._embedding_lock:
                 self._update_state(
@@ -206,11 +200,10 @@ class BookImportService:
                     self._states[book_path.book_id] = dict(state)
                 (book_path.root / IMPORT_STATE_FILE).unlink()
         except Exception as exc:
-            shutil.rmtree(temporary_dir, ignore_errors=True)
             self._update_state(
                 book_path,
                 status="failed",
-                message="向量化失败，可以重新尝试",
+                message="向量化失败，可以从已有进度继续",
                 error=str(exc),
             )
 
@@ -266,12 +259,19 @@ class BookImportService:
                 continue
             state.update({
                 "status": "failed",
-                "message": "后端在向量化期间重新启动，可以重新尝试",
+                "message": "向量化已中断，可以从已有进度继续",
                 "error": "向量化任务因后端重启而中断",
             })
             book_path = BookPaths(state["book_id"])
-            self._remove_building_dirs(book_path.book_id)
             self._save_state(book_path, state)
+
+    @staticmethod
+    def _building_dir(book_id: str) -> Path:
+        vector_root = DATABASE_DIR / "vector_db"
+        existing = sorted(vector_root.glob(f".building-{book_id}-*"))
+        if existing:
+            return existing[0]
+        return vector_root / f".building-{book_id}"
 
     @staticmethod
     def _remove_building_dirs(book_id: str) -> None:

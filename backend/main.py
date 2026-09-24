@@ -17,7 +17,7 @@ from services.reading_service import get_reading_settings, save_reading_settings
 from services.models import ChatEvent, Conversation
 from config import BOOKS_DIR, SELECTED_BOOK_FILE, BookPaths
 from tool_results import load_tool_result_data, make_tool_result
-#部署方法： uvicorn backend.main:app --reload
+
 app = FastAPI()
 summary_service = SummaryService()
 chat_service = ChatService()
@@ -139,6 +139,20 @@ def _all_book_ids() -> list[str]:
     return sorted(path.name for path in BOOKS_DIR.iterdir() if path.is_dir())
 
 
+def _chat_ready_book_ids() -> list[str]:
+    if not BOOKS_DIR.exists():
+        return []
+    return sorted(
+        path.name
+        for path in BOOKS_DIR.iterdir()
+        if path.is_dir()
+        and (
+            not (path / IMPORT_STATE_FILE).exists()
+            or (path / "info.txt").exists()
+        )
+    )
+
+
 def _book_names(book_ids: list[str]) -> dict[str, str]:
     names: dict[str, str] = {}
     for book_id in book_ids:
@@ -165,7 +179,7 @@ def _require_book_id(value: str) -> str:
     book_id = value.strip()
     if not book_id:
         raise HTTPException(status_code=422, detail="book_id 不能为空")
-    if book_id not in _available_book_ids():
+    if book_id not in _chat_ready_book_ids():
         raise HTTPException(status_code=404, detail=f"找不到书籍：{book_id}")
     return book_id
 
@@ -218,6 +232,7 @@ def _conversation_payload(conversation: Conversation) -> dict:
 @app.get("/api/books")
 def get_books():
     book_ids = _available_book_ids()
+    chat_ready_book_ids = _chat_ready_book_ids()
     all_book_ids = _all_book_ids()
     importing_book_ids = sorted(set(all_book_ids) - set(book_ids))
     selected_book_id = (
@@ -225,8 +240,12 @@ def get_books():
         if SELECTED_BOOK_FILE.exists()
         else ""
     )
-    if selected_book_id not in book_ids:
-        selected_book_id = book_ids[0] if book_ids else None
+    if selected_book_id not in chat_ready_book_ids:
+        selected_book_id = (
+            book_ids[0]
+            if book_ids
+            else chat_ready_book_ids[0] if chat_ready_book_ids else None
+        )
         if selected_book_id is None:
             SELECTED_BOOK_FILE.unlink(missing_ok=True)
         else:

@@ -21,6 +21,10 @@ class BookSelectionTests(unittest.TestCase):
         incomplete = self.books_dir / "book-incomplete"
         incomplete.mkdir()
         (incomplete / IMPORT_STATE_FILE).write_text("{}", encoding="utf-8")
+        embedding = self.books_dir / "book-embedding"
+        embedding.mkdir()
+        (embedding / IMPORT_STATE_FILE).write_text("{}", encoding="utf-8")
+        (embedding / "info.txt").write_text("简介", encoding="utf-8")
 
         for patcher in (
             patch.object(backend_module, "BOOKS_DIR", self.books_dir),
@@ -55,6 +59,16 @@ class BookSelectionTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 404)
         self.assertFalse(self.selected_book_file.exists())
+
+    def test_book_being_embedded_can_be_selected(self):
+        backend_module.save_selected_book(
+            backend_module.BookSelectionRequest(book_id="book-embedding")
+        )
+
+        selection = backend_module.get_books()
+
+        self.assertEqual(selection["selected_book_id"], "book-embedding")
+        self.assertIn("book-embedding", selection["importing_book_ids"])
 
 
 if __name__ == "__main__":

@@ -227,7 +227,6 @@ def build_embedding(
             })
 
 
-    print(f"共{len(documents)}个文本块")
 
     if not documents:
         raise ValueError("没有可用于向量化的章节正文")
@@ -236,27 +235,36 @@ def build_embedding(
     vector_client = chromadb.PersistentClient(path=output_dir)
     try:
         collection = vector_client.get_or_create_collection(name=VECTOR_COLLECTION_NAME)
-        model = get_model()
         total = len(documents)
+        existing_ids = set(collection.get(include=[])["ids"])
+        pending_indexes = [
+            index
+            for index, item_id in enumerate(ids)
+            if item_id not in existing_ids
+        ]
+        processed = total - len(pending_indexes)
+        if on_progress is not None:
+            on_progress(processed, total)
 
-        for i in range(0, total, EMBEDDING_PROGRESS_BATCH_SIZE):
-            end = min(i + EMBEDDING_PROGRESS_BATCH_SIZE, total)
+        model = get_model() if pending_indexes else None
+        for i in range(0, len(pending_indexes), EMBEDDING_PROGRESS_BATCH_SIZE):
+            batch_indexes = pending_indexes[i:i + EMBEDDING_PROGRESS_BATCH_SIZE]
             vectors = model.encode(
-                documents[i:end],
+                [documents[index] for index in batch_indexes],
                 batch_size=EMBEDDING_BATCH_SIZE,
             )
             collection.add(
-                ids=ids[i:end],
-                documents=documents[i:end],
+                ids=[ids[index] for index in batch_indexes],
+                documents=[documents[index] for index in batch_indexes],
                 embeddings=vectors.tolist(),
-                metadatas=metadatas[i:end],
+                metadatas=[metadatas[index] for index in batch_indexes],
             )
+            processed += len(batch_indexes)
             if on_progress is not None:
-                on_progress(end, total)
+                on_progress(processed, total)
     finally:
         vector_client.close()
 
-    print("embedding完成")
 
 
 def search(
@@ -265,6 +273,7 @@ def search(
     max_chapter: int | None,
     n=SEMANTIC_SEARCH_DEFAULT_N,
     top_k=SEMANTIC_SEARCH_TOP_K,
+    min_chapter: int | None = None,
 ):
     collection = get_collection(book_path)
     collection_count = collection.count()
@@ -279,7 +288,14 @@ def search(
         "query_embeddings": [vector.tolist()],
         "n_results": min(top_k, collection_count),
     }
-    if max_chapter is not None:
+    if min_chapter is not None and max_chapter is not None:
+        query_arguments["where"] = {"$and": [
+            {"chapter": {"$gte": min_chapter}},
+            {"chapter": {"$lte": max_chapter}},
+        ]}
+    elif min_chapter is not None:
+        query_arguments["where"] = {"chapter": {"$gte": min_chapter}}
+    elif max_chapter is not None:
         query_arguments["where"] = {"chapter": {"$lte": max_chapter}}
     result=collection.query(**query_arguments)
 
@@ -299,6 +315,12 @@ def search(
         zip(result_ids, documents, metadatas),
         1,
     ):
+        chapter = int(metadata["chapter"])
+        if (
+            (min_chapter is not None and chapter < min_chapter)
+            or (max_chapter is not None and chapter > max_chapter)
+        ):
+            continue
         candidates[item_id] = {
             "id": item_id,
             "document": document,
@@ -310,6 +332,8 @@ def search(
     lexical_scored = []
     for item in _get_lexical_corpus(collection, book_path):
         chapter = int(item["metadata"]["chapter"])
+        if min_chapter is not None and chapter < min_chapter:
+            continue
         if max_chapter is not None and chapter > max_chapter:
             continue
         lexical_scored.append((_lexical_score(normalized_query, item["normalized"]), item))
@@ -322,6 +346,9 @@ def search(
         candidates.setdefault(item["id"], item)
         lexical_ranks[item["id"]] = rank
         lexical_scores[item["id"]] = score
+
+    if not candidates:
+        return []
 
     # Keep cross-encoder work bounded while retaining candidates from both recall paths.
     pre_ranked = sorted(

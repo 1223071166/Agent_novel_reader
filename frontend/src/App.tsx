@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { cancelStream, deleteConversation as deleteConversationApi, loadBookSelection, loadConversations, saveBookSelection, streamChat } from "./api";
+import { cancelStream, deleteConversation as deleteConversationApi, loadBookImport, loadBookSelection, loadConversations, saveBookSelection, streamChat } from "./api";
 import {
   addTokenUsage,
   applyChatEvent,
@@ -17,11 +17,19 @@ import {
 } from "./workspaceState";
 import type {
   BookImporterTarget,
+  BookImportStatus,
   BookWorkspace,
   ChatEvent,
   RunningRequest,
   ToolResult,
 } from "./types";
+
+const embeddingRunningStatuses = new Set<BookImportStatus["status"]>([
+  "pending",
+  "loading_model",
+  "encoding",
+  "writing",
+]);
 
 const toolDisplayName = (name: string, args: unknown, result?: ToolResult) => {
   const argumentsObject = args && typeof args === "object"
@@ -31,13 +39,48 @@ const toolDisplayName = (name: string, args: unknown, result?: ToolResult) => {
   const keyword = argumentsObject.keyword;
   const query = argumentsObject.query;
 
-  if (name === "get_chapter_list") return "读取章节目录";
-  if (name === "get_chapter" && chapterId !== undefined) return `阅读第 ${chapterId} 章`;
-  if (name === "search_keyword" && keyword !== undefined) return `关键词全文搜索：${keyword}`;
-  if (name === "search_keyword_in_chapter" && chapterId !== undefined && keyword !== undefined) {
-    return `第 ${chapterId} 章关键词搜索：${keyword}`;
+  if (name === "get_chapter_list") {
+    const startChapter = argumentsObject.start_chapter;
+    const endChapter = argumentsObject.end_chapter;
+    if (typeof query === "string" && query.trim()) {
+      if (typeof startChapter === "number" && typeof endChapter === "number") {
+        return `在第 ${startChapter}-${endChapter} 章查找标题：${query}`;
+      }
+      if (typeof startChapter === "number") return `在第 ${startChapter} 章后查找标题：${query}`;
+      if (typeof endChapter === "number") return `在前 ${endChapter} 章查找标题：${query}`;
+      return `查找章节标题：${query}`;
+    }
+    if (typeof startChapter === "number" && typeof endChapter === "number") {
+      return `查看第 ${startChapter}-${endChapter} 章目录`;
+    }
+    if (typeof startChapter === "number") return `查看第 ${startChapter} 章后的目录`;
+    if (typeof endChapter === "number") return `查看前 ${endChapter} 章目录`;
+    return "读取章节目录";
   }
-  if (name === "semantic_search" && query !== undefined) return `模糊搜索：${query}`;
+  if (name === "get_chapter" && chapterId !== undefined) return `阅读第 ${chapterId} 章`;
+  if (name === "get_chapters" && Array.isArray(argumentsObject.chapter_ids)) {
+    return `阅读第 ${argumentsObject.chapter_ids.map(String).join("、")} 章`;
+  }
+  if (name === "search_keyword" && keyword !== undefined) {
+    const startChapter = argumentsObject.start_chapter;
+    const endChapter = argumentsObject.end_chapter;
+    if (typeof startChapter === "number" && typeof endChapter === "number") {
+      return `第 ${startChapter}-${endChapter} 章关键词搜索：${keyword}`;
+    }
+    if (typeof startChapter === "number") return `第 ${startChapter} 章后关键词搜索：${keyword}`;
+    if (typeof endChapter === "number") return `前 ${endChapter} 章关键词搜索：${keyword}`;
+    return `关键词全文搜索：${keyword}`;
+  }
+  if (name === "semantic_search" && query !== undefined) {
+    const startChapter = argumentsObject.start_chapter;
+    const endChapter = argumentsObject.end_chapter;
+    if (typeof startChapter === "number" && typeof endChapter === "number") {
+      return `第 ${startChapter}-${endChapter} 章模糊搜索：${query}`;
+    }
+    if (typeof startChapter === "number") return `第 ${startChapter} 章后模糊搜索：${query}`;
+    if (typeof endChapter === "number") return `前 ${endChapter} 章模糊搜索：${query}`;
+    return `模糊搜索：${query}`;
+  }
   if (name === "get_summary") {
     const level = argumentsObject.level;
     if (level === "whole") return "查看全书总结";
@@ -64,9 +107,11 @@ function App() {
   const [runningRequests, setRunningRequests] = useState<RunningRequest[]>([]);
   const [switchingBook, setSwitchingBook] = useState(false);
   const [bookImporterTarget, setBookImporterTarget] = useState<BookImporterTarget | null>(null);
+  const [embeddingStatus, setEmbeddingStatus] = useState<BookImportStatus | null>(null);
   const [summaryManagerBookId, setSummaryManagerBookId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [appError, setAppError] = useState("");
+  const bookId = workspace?.bookId ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -95,7 +140,40 @@ function App() {
     return () => { cancelled = true; };
   }, []);
 
-  const bookId = workspace?.bookId ?? null;
+  useEffect(() => {
+    if (!bookId || !importingBookIds.includes(bookId)) {
+      setEmbeddingStatus(null);
+      return;
+    }
+
+    let cancelled = false;
+    let timer: number | undefined;
+    const refresh = async () => {
+      try {
+        const status = await loadBookImport(bookId);
+        if (cancelled) return;
+        if (status.status === "completed") {
+          setImportingBookIds((previous) => previous.filter((id) => id !== bookId));
+          setEmbeddingStatus(null);
+          return;
+        }
+        setEmbeddingStatus(status);
+        if (embeddingRunningStatuses.has(status.status)) {
+          timer = window.setTimeout(() => void refresh(), 1000);
+        }
+      } catch (requestError) {
+        if (!cancelled) {
+          setAppError(requestError instanceof Error ? requestError.message : "读取向量化进度失败");
+        }
+      }
+    };
+    void refresh();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [bookId, importingBookIds]);
+
   const conversations = workspace?.conversations ?? [];
   const activeConversation = workspace?.conversations.find(
     (conversation) => conversation.id === workspace.activeConversationId,
@@ -232,12 +310,20 @@ function App() {
     setBookImporterTarget(null);
   };
 
-  const selectBook = (nextBookId: string) => {
+  const selectBook = async (nextBookId: string) => {
     if (importingBookIds.includes(nextBookId)) {
-      setBookImporterTarget({ bookId: nextBookId });
-      return;
+      try {
+        const status = await loadBookImport(nextBookId);
+        if (status.status === "splitting" || status.status === "awaiting_info") {
+          setBookImporterTarget({ bookId: nextBookId });
+          return;
+        }
+      } catch (requestError) {
+        setAppError(requestError instanceof Error ? requestError.message : "读取导入进度失败");
+        return;
+      }
     }
-    void switchBook(nextBookId);
+    await switchBook(nextBookId);
   };
 
   const sendMessage = async () => {
@@ -423,16 +509,45 @@ function App() {
                 aria-label="切换书籍"
                 value={bookId ?? ""}
                 disabled={books.length === 0 || hasRunningRequests || switchingBook}
-                onChange={(event) => selectBook(event.target.value)}
+                onChange={(event) => void selectBook(event.target.value)}
               >
                 {!bookId && <option value="" disabled>选择书籍</option>}
                 {books.map((book) => (
                   <option key={book} value={book}>
-                    {bookDisplayName(book, bookNames)}{importingBookIds.includes(book) ? "（未完成）" : ""}
+                    {bookDisplayName(book, bookNames)}
                   </option>
                 ))}
               </select>
             </label>
+            {embeddingStatus && (
+              <div className="topbar-embedding">
+                <button
+                  className="topbar-embedding-label"
+                  type="button"
+                  title="查看向量化状态"
+                  onClick={() => bookId && setBookImporterTarget({ bookId })}
+                >
+                  <span>{embeddingStatus.message}</span>
+                  <span>{embeddingRunningStatuses.has(embeddingStatus.status)
+                    ? embeddingStatus.total > 0
+                      ? `${embeddingStatus.processed}/${embeddingStatus.total}`
+                      : "准备中"
+                    : "查看"}</span>
+                </button>
+                {embeddingRunningStatuses.has(embeddingStatus.status) && (
+                  <div className="embedding-progress" aria-label={`向量化进度 ${embeddingStatus.processed}/${embeddingStatus.total}`}>
+                    <div
+                      className="embedding-progress-value"
+                      style={{
+                        width: `${embeddingStatus.total > 0
+                          ? Math.round(embeddingStatus.processed / embeddingStatus.total * 100)
+                          : 0}%`,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
             <button
               className="summary-open"
               type="button"

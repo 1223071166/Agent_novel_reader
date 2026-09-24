@@ -319,6 +319,29 @@ button {
   gap: 12px;
 }
 
+.topbar-embedding {
+  width: 210px;
+}
+
+.topbar-embedding-label {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #637066;
+  cursor: pointer;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.topbar-embedding .embedding-progress {
+  height: 5px;
+}
+
 .book-selector {
   display: flex;
   align-items: center;

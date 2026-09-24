@@ -85,7 +85,7 @@ class BookImportServiceTests(unittest.TestCase):
                 service.discard_import(discarded["book_id"])
                 self.assertFalse(discarded_root.exists())
 
-    def test_running_import_is_recovered_as_failed_after_restart(self):
+    def test_running_import_keeps_partial_vectors_for_resume_after_restart(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             books_dir = root / "books"
@@ -113,12 +113,14 @@ class BookImportServiceTests(unittest.TestCase):
             ):
                 service = BookImportService()
                 recovered = service.get_status(book_id)
+                self.assertEqual(service._building_dir(book_id), building_dir)
 
             self.assertEqual(recovered["status"], "failed")
             self.assertEqual(recovered["processed"], 12)
             self.assertIn("后端重启", recovered["error"])
+            self.assertIn("已有进度继续", recovered["message"])
             self.assertTrue(marker.exists())
-            self.assertFalse(building_dir.exists())
+            self.assertTrue(building_dir.exists())
 
     def test_running_embedding_rejects_info_changes_without_touching_build_files(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
