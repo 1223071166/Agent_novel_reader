@@ -50,6 +50,7 @@ class ChatService:
             for conversation_id in self._conversations
         }
         self._conversations_lock = threading.Lock()
+        self._deleted_book_ids: set[str] = set()
 
     def create_conversation(
         self,
@@ -60,6 +61,8 @@ class ChatService:
         max_chapter: int | None = None,
     ) -> str:
         with self._conversations_lock:
+            if book_id in self._deleted_book_ids:
+                raise ValueError("书籍已删除")
             existing = self._conversations.get(conversation_id)
             if existing is not None:
                 if existing.book_id != book_id:
@@ -112,7 +115,6 @@ class ChatService:
         try:
             app_settings = get_app_settings()
             tool_round_limit = int(app_settings["tool_round_limit"])
-            show_usage = bool(app_settings["show_usage"])
             model_connection = get_model_connection(str(app_settings["model_provider"]))
         except ValueError as exc:
             yield ChatEvent("error", {
@@ -139,16 +141,22 @@ class ChatService:
             return
 
         book_path = BookPaths(book_id)
-        load_titles(book_path)
+        use_semantic_search = book_path.vector_db_dir.exists()
         with self._conversations_lock:
-            lock = self._locks[conversation_id]
-            acquired = lock.acquire(blocking=False)
-            if acquired:
+            lock = self._locks.get(conversation_id)
+            acquired = lock.acquire(blocking=False) if lock is not None else False
+            if lock is not None and acquired:
                 cancel_event = self._cancel_events.get(conversation_id)
                 if cancel_event is None:
                     cancel_event = threading.Event()
                     self._cancel_events[conversation_id] = cancel_event
 
+        if lock is None:
+            yield ChatEvent("error", {
+                "code": "conversation_unavailable",
+                "message": "书籍或对话已删除",
+            })
+            return
         if not acquired:
             yield ChatEvent("error", {
                 "code": "conversation_busy",
@@ -157,6 +165,7 @@ class ChatService:
             return
         message_id = str(uuid.uuid4())
         try:
+            load_titles(book_path)
             self._append_message(
                 conversation_id,
                 Message(id=message_id, role="user", content=user_content),
@@ -168,18 +177,40 @@ class ChatService:
             })
 
             has_error = False
+            answer_usage: dict[str, int] | None = None
+            usage_complete = True
             for event in self._run_model(
                 book_path,
                 conversation_id,
                 cancel_event,
                 use_summary_tool,
+                use_semantic_search,
                 max_chapter,
                 tool_round_limit,
-                show_usage,
                 model_connection,
             ):
+                if event.event == "usage":
+                    if answer_usage is None:
+                        answer_usage = dict(event.data)
+                    else:
+                        for field, value in event.data.items():
+                            answer_usage[field] = answer_usage.get(field, 0) + value
+                    continue
+                if event.event == "usage_unavailable":
+                    usage_complete = False
+                    continue
                 yield event
                 has_error = has_error or event.event == "error"
+
+            if not has_error and usage_complete and answer_usage is not None:
+                assistant_message_id = self._save_answer_usage(
+                    conversation_id, message_id, answer_usage
+                )
+                if assistant_message_id is not None:
+                    yield ChatEvent("usage", {
+                        **answer_usage,
+                        "message_id": assistant_message_id,
+                    })
 
             if not has_error:
                 yield ChatEvent("done", {
@@ -190,19 +221,32 @@ class ChatService:
             self._cancel_events.pop(conversation_id, None)
             lock.release()
 
+    def _save_answer_usage(
+        self, conversation_id: str, user_message_id: str, usage: dict[str, int]
+    ) -> str | None:
+        with self._conversations_lock:
+            for message in reversed(self._conversations[conversation_id].messages):
+                if message.id == user_message_id:
+                    break
+                if message.role == "assistant" and message.content:
+                    self._store.update_message_usage(conversation_id, message.id, usage)
+                    message.usage = usage
+                    return message.id
+        return None
+
     def _run_model(
         self,
         book_path: BookPaths,
         conversation_id: str,
         cancel_event: threading.Event,
         use_summary_tool: bool,
+        use_semantic_search: bool,
         max_chapter: int | None,
         tool_round_limit: int,
-        show_usage: bool,
         model_connection: ModelConnection,
     ) -> Iterator[ChatEvent]:
         tool_context = NovelToolContext(book_path, max_chapter)
-        tools = build_tools(use_summary_tool)
+        tools = build_tools(use_summary_tool, use_semantic_search)
         allowed_tool_names = {
             tool["function"]["name"]
             for tool in tools
@@ -212,9 +256,9 @@ class ChatService:
                 conversation_id,
                 cancel_event,
                 use_summary_tool,
+                use_semantic_search,
                 max_chapter,
                 tools,
-                show_usage,
                 model_connection,
             )
             if not completed:
@@ -235,9 +279,9 @@ class ChatService:
             conversation_id,
             cancel_event,
             use_summary_tool,
+            use_semantic_search,
             max_chapter,
             None,
-            show_usage,
             model_connection,
             f"本轮回答已达工具调用次数上限：{tool_round_limit} 次。请根据已有信息直接回答用户。",
         )
@@ -247,9 +291,9 @@ class ChatService:
         conversation_id: str,
         cancel_event: threading.Event,
         use_summary_tool: bool,
+        use_semantic_search: bool,
         max_chapter: int | None,
         tools: list[dict[str, Any]] | None,
-        show_usage: bool,
         model_connection: ModelConnection,
         final_instruction: str | None = None,
     ) -> Generator[ChatEvent, None, tuple[bool, list[dict[str, Any]]]]:
@@ -263,6 +307,7 @@ class ChatService:
         messages = self._messages_for_request(
             conversation_id,
             use_summary_tool,
+            use_semantic_search,
             max_chapter,
         )
         if final_instruction is not None:
@@ -275,8 +320,7 @@ class ChatService:
         }
         if tools is not None:
             request_args["tools"] = tools
-        if show_usage:
-            request_args["stream_options"] = {"include_usage": True}
+        request_args["stream_options"] = {"include_usage": True}
 
         try:
             response = model_connection.client.chat.completions.create(**request_args)
@@ -304,10 +348,13 @@ class ChatService:
                         "message": "用户终止了这条回答",
                     })
                     return False, []
-                if show_usage:
-                    usage = get_field(chunk, "usage")
-                    if usage is not None:
-                        current_usage = read_usage(usage)
+                usage = get_field(chunk, "usage")
+                if usage is not None and any(
+                    isinstance(get_field(usage, field), (int, float))
+                    and not isinstance(get_field(usage, field), bool)
+                    for field in ("prompt_tokens", "completion_tokens", "total_tokens")
+                ):
+                    current_usage = read_usage(usage)
 
                 if not getattr(chunk, "choices", None):
                     continue
@@ -351,6 +398,8 @@ class ChatService:
 
         if current_usage is not None:
             yield ChatEvent("usage", current_usage)
+        else:
+            yield ChatEvent("usage_unavailable", {})
 
         assistant_message = Message(
             id=str(uuid.uuid4()),
@@ -457,13 +506,14 @@ class ChatService:
         self,
         conversation_id: str,
         use_summary_tool: bool,
+        use_semantic_search: bool,
         max_chapter: int | None,
     ) -> list[dict[str, Any]]:
         with self._conversations_lock:
             messages = self._conversations[conversation_id].messages
             request_messages = [self._message_for_request(message) for message in messages]
 
-        current_prompt = get_system_prompt(use_summary_tool, max_chapter)
+        current_prompt = get_system_prompt(use_summary_tool, max_chapter, use_semantic_search)
         for message in request_messages:
             if message["role"] == "system":
                 message["content"] = current_prompt
@@ -505,7 +555,9 @@ class ChatService:
             Message(
                 id=str(uuid.uuid4()),
                 role="system",
-                content=get_system_prompt(use_summary_tool, max_chapter),
+                content=get_system_prompt(
+                    use_summary_tool, max_chapter, book_path.vector_db_dir.exists()
+                ),
             ),
             Message(
                 id=str(uuid.uuid4()),

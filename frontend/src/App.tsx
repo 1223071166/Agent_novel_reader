@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
-import { cancelStream, deleteConversation as deleteConversationApi, loadBookImport, loadBookSelection, loadConversations, saveBookSelection, streamChat } from "./api";
+import { cancelStream, deleteConversation as deleteConversationApi, loadAppSettings, loadBookEmbeddingStatus, loadBookImport, loadBookSelection, loadConversations, saveBookSelection, startBookEmbedding, streamChat } from "./api";
 import {
-  addTokenUsage,
   applyChatEvent,
   appendUserItem,
   removeUnsentMessage,
 } from "./chatTimeline";
+import BookDeleteDialog from "./BookDeleteDialog";
 import BookImporter from "./BookImporter";
+import EmbeddingManager from "./EmbeddingManager";
 import SettingsDialog from "./SettingsDialog";
 import SummaryManager from "./SummaryManager";
 import SpoilerControls from "./SpoilerControls";
@@ -19,6 +20,7 @@ import {
 import type {
   BookImporterTarget,
   BookImportStatus,
+  BookSelection,
   BookWorkspace,
   ChatEvent,
   RunningRequest,
@@ -109,10 +111,27 @@ function App() {
   const [switchingBook, setSwitchingBook] = useState(false);
   const [bookImporterTarget, setBookImporterTarget] = useState<BookImporterTarget | null>(null);
   const [embeddingStatus, setEmbeddingStatus] = useState<BookImportStatus | null>(null);
+  const [embeddingStatusError, setEmbeddingStatusError] = useState("");
+  const [embeddingManagerBookId, setEmbeddingManagerBookId] = useState<string | null>(null);
+  const [embeddingRefreshKey, setEmbeddingRefreshKey] = useState(0);
   const [summaryManagerBookId, setSummaryManagerBookId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [bookDeleteOpen, setBookDeleteOpen] = useState(false);
+  const [showUsage, setShowUsage] = useState(false);
   const [appError, setAppError] = useState("");
   const bookId = workspace?.bookId ?? null;
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadAppSettings()
+      .then((settings) => {
+        if (!cancelled) setShowUsage(settings.show_usage);
+      })
+      .catch((requestError) => {
+        if (!cancelled) setAppError(requestError instanceof Error ? requestError.message : "加载设置失败");
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -142,8 +161,9 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!bookId || !importingBookIds.includes(bookId)) {
+    if (!bookId) {
       setEmbeddingStatus(null);
+      setEmbeddingStatusError("");
       return;
     }
 
@@ -151,20 +171,17 @@ function App() {
     let timer: number | undefined;
     const refresh = async () => {
       try {
-        const status = await loadBookImport(bookId);
+        const status = await loadBookEmbeddingStatus(bookId);
         if (cancelled) return;
-        if (status.status === "completed") {
-          setImportingBookIds((previous) => previous.filter((id) => id !== bookId));
-          setEmbeddingStatus(null);
-          return;
-        }
         setEmbeddingStatus(status);
+        setEmbeddingStatusError("");
         if (embeddingRunningStatuses.has(status.status)) {
           timer = window.setTimeout(() => void refresh(), 1000);
         }
       } catch (requestError) {
         if (!cancelled) {
-          setAppError(requestError instanceof Error ? requestError.message : "读取向量化进度失败");
+          setEmbeddingStatus(null);
+          setEmbeddingStatusError(requestError instanceof Error ? requestError.message : "读取向量化进度失败");
         }
       }
     };
@@ -173,7 +190,7 @@ function App() {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [bookId, importingBookIds, bookImporterTarget]);
+  }, [bookId, embeddingRefreshKey]);
 
   const conversations = workspace?.conversations ?? [];
   const activeConversation = workspace?.conversations.find(
@@ -211,7 +228,6 @@ function App() {
         messages: appendUserItem(conversation.messages, content),
         draft: "",
         error: "",
-        usage: null,
       }),
     ));
   };
@@ -231,9 +247,6 @@ function App() {
           ? chatEvent.data.title
           : conversation.title,
         messages: applyChatEvent(conversation.messages, chatEvent),
-        usage: chatEvent.event === "usage"
-          ? addTokenUsage(conversation.usage, chatEvent.data)
-          : conversation.usage,
       }),
     ));
   };
@@ -265,28 +278,53 @@ function App() {
   };
 
   const switchBook = async (nextBookId: string) => {
-    if (nextBookId === workspace?.bookId || hasRunningRequests || switchingBook) return;
+    if (nextBookId === workspace?.bookId) return true;
+    if (hasRunningRequests || switchingBook) return false;
 
     setSwitchingBook(true);
     setAppError("");
     try {
       const savedConversations = await loadConversations(nextBookId);
       await saveBookSelection(nextBookId);
+      setEmbeddingStatus(null);
+      setEmbeddingStatusError("");
       setWorkspace(makeWorkspace(nextBookId, savedConversations));
+      return true;
     } catch (requestError) {
       setAppError(requestError instanceof Error ? requestError.message : "切换书籍失败");
+      return false;
     } finally {
       setSwitchingBook(false);
     }
   };
 
-  const finishBookImport = async (importedBookId: string) => {
+  const finishBookImport = async (importedBookId: string, generateEmbedding: boolean) => {
     const selection = await loadBookSelection();
     setBooks(selection.books);
     setBookNames(selection.book_names ?? {});
     setImportingBookIds(selection.importing_book_ids);
-    await switchBook(importedBookId);
+    if (!await switchBook(importedBookId)) {
+      throw new Error("书籍已导入，当前无法切换；请稍后点击“进入书籍”");
+    }
     setBookImporterTarget(null);
+    if (generateEmbedding) {
+      try {
+        const status = await startBookEmbedding(importedBookId);
+        setEmbeddingStatus(status);
+        setEmbeddingRefreshKey((previous) => previous + 1);
+      } catch (requestError) {
+        setAppError(requestError instanceof Error ? requestError.message : "启动向量化失败");
+      }
+    }
+  };
+
+  const startEmbeddingForBook = async (targetBookId: string) => {
+    const status = await startBookEmbedding(targetBookId);
+    if (bookId === targetBookId) {
+      setEmbeddingStatus(status);
+      setEmbeddingStatusError("");
+    }
+    setEmbeddingRefreshKey((previous) => previous + 1);
   };
 
   const registerBookImport = (importedBookId: string, name: string) => {
@@ -299,16 +337,38 @@ function App() {
     setBookNames((previous) => ({ ...previous, [importedBookId]: name }));
   };
 
-  const updateBookName = (targetBookId: string, name: string) => {
-    setBookNames((previous) => ({ ...previous, [targetBookId]: name }));
-  };
-
   const finishDiscardBookImport = async () => {
     const selection = await loadBookSelection();
     setBooks(selection.books);
     setBookNames(selection.book_names ?? {});
     setImportingBookIds(selection.importing_book_ids);
     setBookImporterTarget(null);
+  };
+
+  const finishBookDeletion = (deletedBookId: string, selection: BookSelection) => {
+    setBooks(selection.books);
+    setBookNames(selection.book_names ?? {});
+    setImportingBookIds(selection.importing_book_ids);
+    if (workspace?.bookId !== deletedBookId) return;
+
+    setWorkspace(null);
+    setEmbeddingStatus(null);
+    setEmbeddingStatusError("");
+    setEmbeddingManagerBookId(null);
+    setSummaryManagerBookId(null);
+    const nextBookId = selection.selected_book_id;
+    if (!nextBookId) {
+      setAppError("还没有书籍，可以先导入一本小说");
+      return;
+    }
+    void loadConversations(nextBookId)
+      .then((savedConversations) => {
+        setWorkspace((previous) => previous ?? makeWorkspace(nextBookId, savedConversations));
+        setAppError("");
+      })
+      .catch((requestError) => {
+        setAppError(requestError instanceof Error ? requestError.message : "加载剩余书籍失败");
+      });
   };
 
   const selectBook = async (nextBookId: string) => {
@@ -536,22 +596,29 @@ function App() {
                 ))}
               </select>
             </label>
-            {embeddingStatus && (
+            {bookId && (
               <div className="topbar-embedding">
                 <button
                   className="topbar-embedding-label"
                   type="button"
-                  title="查看向量化状态"
-                  onClick={() => bookId && setBookImporterTarget({ bookId })}
+                  title={embeddingStatus?.status === "completed" ? "模糊搜索已可用" : "查看模糊搜索状态"}
+                  disabled={embeddingStatus?.status === "completed"}
+                  onClick={() => {
+                    setEmbeddingManagerBookId(bookId);
+                    setEmbeddingRefreshKey((previous) => previous + 1);
+                  }}
                 >
-                  <span>{embeddingStatus.message}</span>
-                  <span>{embeddingRunningStatuses.has(embeddingStatus.status)
+                  <span>模糊搜索</span>
+                  <span>{embeddingStatus && embeddingRunningStatuses.has(embeddingStatus.status)
                     ? embeddingStatus.total > 0
                       ? `${embeddingStatus.processed}/${embeddingStatus.total}`
                       : "准备中"
-                    : "查看"}</span>
+                    : embeddingStatusError ? "读取失败"
+                      : embeddingStatus?.status === "completed" ? "可用"
+                      : embeddingStatus?.status === "failed" ? "失败"
+                        : embeddingStatus?.status === "ready_for_embedding" ? "未建立" : "读取中"}</span>
                 </button>
-                {embeddingRunningStatuses.has(embeddingStatus.status) && (
+                {embeddingStatus && embeddingRunningStatuses.has(embeddingStatus.status) && (
                   <div className="embedding-progress" aria-label={`向量化进度 ${embeddingStatus.processed}/${embeddingStatus.total}`}>
                     <div
                       className="embedding-progress-value"
@@ -582,10 +649,7 @@ function App() {
               />
             )}
           </div>
-          <div className="topbar-status">
-            <span />
-            {switchingBook ? "正在切换" : "本地模式"}
-          </div>
+
         </header>
         <section className="chat">
           {!activeConversation || activeConversation.messages.length === 0 ? (
@@ -626,23 +690,20 @@ function App() {
                         </details>
                       )}
                       {(item.type === "user" || item.type === "assistant") && item.content}
+                      {item.type === "assistant" && showUsage && item.usage && (
+                        <div className="usage-row">
+                          Token：输入 {item.usage.input}
+                          <span>·</span> 输出 {item.usage.output}
+                          <span>·</span> 合计 {item.usage.total}
+                          <span>·</span> 缓存命中 {item.usage.cached_input}
+                          <span>·</span> 缓存未命中 {item.usage.cache_miss_input}
+                          <span>·</span> 推理 {item.usage.reasoning}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
               })}
-              {activeConversation.usage && (
-                <div className="usage-row">
-                  <div className="avatar-space" aria-hidden="true" />
-                  <div>
-                    本轮 Token：输入 {activeConversation.usage.input}
-                    <span>·</span> 输出 {activeConversation.usage.output}
-                    <span>·</span> 合计 {activeConversation.usage.total}
-                    <span>·</span> 缓存命中 {activeConversation.usage.cached_input}
-                    <span>·</span> 缓存未命中 {activeConversation.usage.cache_miss_input}
-                    <span>·</span> 推理 {activeConversation.usage.reasoning}
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </section>
@@ -695,9 +756,19 @@ function App() {
           initialBookId={bookImporterTarget.bookId}
           onClose={() => setBookImporterTarget(null)}
           onImportCreated={registerBookImport}
-          onInfoSaved={updateBookName}
           onImported={finishBookImport}
           onDiscarded={finishDiscardBookImport}
+        />
+      )}
+      {embeddingManagerBookId && (
+        <EmbeddingManager
+          key={embeddingManagerBookId}
+          bookName={bookDisplayName(embeddingManagerBookId, bookNames)}
+          status={bookId === embeddingManagerBookId ? embeddingStatus : null}
+          loadError={embeddingStatusError}
+          onClose={() => setEmbeddingManagerBookId(null)}
+          onStart={() => startEmbeddingForBook(embeddingManagerBookId)}
+          onRefresh={() => setEmbeddingRefreshKey((previous) => previous + 1)}
         />
       )}
       {summaryManagerBookId && (
@@ -711,16 +782,17 @@ function App() {
       {settingsOpen && (
         <SettingsDialog
           onClose={() => setSettingsOpen(false)}
-          onSaved={(showUsage) => {
-            if (showUsage) return;
-            setWorkspace((previous) => previous ? {
-              ...previous,
-              conversations: previous.conversations.map((conversation) => ({
-                ...conversation,
-                usage: null,
-              })),
-            } : previous);
+          onSaved={setShowUsage}
+          onDeleteBooks={() => {
+            setSettingsOpen(false);
+            setBookDeleteOpen(true);
           }}
+        />
+      )}
+      {bookDeleteOpen && (
+        <BookDeleteDialog
+          onClose={() => setBookDeleteOpen(false)}
+          onDeleted={finishBookDeletion}
         />
       )}
     </div>

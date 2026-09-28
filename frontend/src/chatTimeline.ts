@@ -48,7 +48,7 @@ export function timelineFromConversation(conversation: Conversation): TimelineIt
         }
       }
       if (message.content !== null && message.content !== "") {
-        items.push({ id: message.id, type: "assistant", content: message.content });
+        items.push({ id: message.id, type: "assistant", content: message.content, usage: message.usage });
       }
       continue;
     }
@@ -89,6 +89,24 @@ export function removeUnsentMessage(items: TimelineItem[], content: string): Tim
 }
 
 export function applyChatEvent(items: TimelineItem[], { event, data }: ChatEvent): TimelineItem[] {
+  if (event === "usage") {
+    let index = -1;
+    for (let itemIndex = items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+      const item = items[itemIndex];
+      if (item.type === "user") break;
+      if (item.type === "assistant" && item.content !== "") {
+        index = itemIndex;
+        break;
+      }
+    }
+    if (index < 0) return items;
+    return items.map((item, itemIndex) => (
+      itemIndex === index && item.type === "assistant"
+        ? { ...item, usage: addTokenUsage(null, data) }
+        : item
+    ));
+  }
+
   if (event === "token") {
     const content = String(data.content ?? "");
     if (!content) return items;

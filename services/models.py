@@ -21,6 +21,7 @@ class Message:
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
     tool_status: str | None = None
+    usage: dict[str, int] | None = None
 
 
 @dataclass

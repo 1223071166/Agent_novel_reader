@@ -502,7 +502,10 @@ AVAILABLE_TOOLS={
 }
 
 
-def build_tools(use_summary_tool=True):
-    if use_summary_tool:
-        return list(TOOLS)
-    return [tool for tool in TOOLS if tool["function"]["name"] != "get_summary"]
+def build_tools(use_summary_tool=True, use_semantic_search=True):
+    excluded = set()
+    if not use_summary_tool:
+        excluded.add("get_summary")
+    if not use_semantic_search:
+        excluded.add("semantic_search")
+    return [tool for tool in TOOLS if tool["function"]["name"] not in excluded]

@@ -50,6 +50,7 @@ class ConversationStore:
                     tool_calls TEXT,
                     tool_call_id TEXT,
                     tool_status TEXT,
+                    usage TEXT,
                     FOREIGN KEY (conversation_id)
                         REFERENCES conversations(id)
                         ON DELETE CASCADE
@@ -67,6 +68,8 @@ class ConversationStore:
             }
             if "tool_status" not in message_columns:
                 connection.execute("ALTER TABLE messages ADD COLUMN tool_status TEXT")
+            if "usage" not in message_columns:
+                connection.execute("ALTER TABLE messages ADD COLUMN usage TEXT")
 
     def create_conversation(self, conversation_id: str, book_id: str, title: str) -> None:
         with self._connect() as connection:
@@ -86,9 +89,10 @@ class ConversationStore:
                     content,
                     tool_calls,
                     tool_call_id,
-                    tool_status
+                    tool_status,
+                    usage
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message.id,
@@ -100,7 +104,17 @@ class ConversationStore:
                     else None,
                     message.tool_call_id,
                     message.tool_status,
+                    json.dumps(message.usage) if message.usage is not None else None,
                 ),
+            )
+
+    def update_message_usage(
+        self, conversation_id: str, message_id: str, usage: dict[str, int]
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE messages SET usage = ? WHERE conversation_id = ? AND id = ?",
+                (json.dumps(usage), conversation_id, message_id),
             )
 
     def load_conversation(self, conversation_id: str, book_id: str) -> Conversation | None:
@@ -115,7 +129,7 @@ class ConversationStore:
 
             rows = connection.execute(
                 """
-                SELECT id, role, content, tool_calls, tool_call_id, tool_status
+                SELECT id, role, content, tool_calls, tool_call_id, tool_status, usage
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY rowid
@@ -138,7 +152,7 @@ class ConversationStore:
 
             message_rows = connection.execute(
                 """
-                SELECT id, conversation_id, role, content, tool_calls, tool_call_id, tool_status
+                SELECT id, conversation_id, role, content, tool_calls, tool_call_id, tool_status, usage
                 FROM messages
                 ORDER BY conversation_id, rowid
                 """
@@ -167,6 +181,11 @@ class ConversationStore:
                 (conversation_id, book_id),
             )
 
+    def delete_book_conversations(self, book_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute("PRAGMA secure_delete = ON")
+            connection.execute("DELETE FROM conversations WHERE book_id = ?", (book_id,))
+
     @staticmethod
     def _message_from_row(row: sqlite3.Row) -> Message:
         tool_calls = (
@@ -181,4 +200,5 @@ class ConversationStore:
             tool_calls=tool_calls,
             tool_call_id=row["tool_call_id"],
             tool_status=row["tool_status"],
+            usage=json.loads(row["usage"]) if row["usage"] is not None else None,
         )

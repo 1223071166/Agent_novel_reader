@@ -59,6 +59,11 @@ class BookImportServiceTests(unittest.TestCase):
                 )
                 self.assertEqual(service.get_import(book_id)["name"], "测试小说")
                 self.assertEqual(service.get_import(book_id)["info"], "这是一本测试小说\n")
+                self.assertFalse((book_root / IMPORT_STATE_FILE).exists())
+                self.assertTrue((book_root / "embedding_state.json").exists())
+                self.assertEqual(BookImportService().get_status(book_id)["status"], "ready_for_embedding")
+                with self.assertRaisesRegex(ValueError, "找不到这次未完成"):
+                    service.discard_import(book_id)
 
                 service.start_embedding(book_id)
                 deadline = time.monotonic() + 2
@@ -73,6 +78,7 @@ class BookImportServiceTests(unittest.TestCase):
                 self.assertEqual(status["total"], 2)
                 self.assertEqual(service.get_import(book_id)["status"], "completed")
                 self.assertFalse((book_root / IMPORT_STATE_FILE).exists())
+                self.assertTrue((book_root / "embedding_state.json").exists())
                 self.assertTrue(
                     (database_dir / "vector_db" / book_id / "chroma.sqlite3").exists()
                 )
@@ -88,7 +94,7 @@ class BookImportServiceTests(unittest.TestCase):
                 self.assertFalse(discarded_root.exists())
                 self.assertFalse(partial_dir.exists())
 
-    def test_running_import_keeps_partial_vectors_for_resume_after_restart(self):
+    def test_interrupted_embedding_keeps_partial_vectors_for_resume(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             books_dir = root / "books"
@@ -96,7 +102,8 @@ class BookImportServiceTests(unittest.TestCase):
             book_id = "book_123456789abc"
             book_root = books_dir / book_id
             book_root.mkdir(parents=True)
-            marker = book_root / IMPORT_STATE_FILE
+            (book_root / "info.txt").write_text("测试概况\n", encoding="utf-8")
+            marker = book_root / "embedding_state.json"
             marker.write_text(json.dumps({
                 "book_id": book_id,
                 "status": "encoding",
@@ -125,6 +132,63 @@ class BookImportServiceTests(unittest.TestCase):
             self.assertTrue(marker.exists())
             self.assertTrue(building_dir.exists())
 
+    def test_restart_recognizes_a_vector_db_finished_before_status_was_saved(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            books_dir = root / "books"
+            database_dir = root / "database"
+            book_id = "book_123456789abc"
+            book_root = books_dir / book_id
+            book_root.mkdir(parents=True)
+            (book_root / "info.txt").write_text("测试概况\n", encoding="utf-8")
+            (book_root / "embedding_state.json").write_text(json.dumps({
+                "book_id": book_id,
+                "status": "writing",
+                "processed": 8,
+                "total": 10,
+            }), encoding="utf-8")
+            (database_dir / "vector_db" / book_id).mkdir(parents=True)
+
+            with (
+                patch.object(config, "BOOKS_DIR", books_dir),
+                patch.object(config, "DATABASE_DIR", database_dir),
+                patch.object(import_module, "BOOKS_DIR", books_dir),
+                patch.object(import_module, "DATABASE_DIR", database_dir),
+            ):
+                status = BookImportService().get_status(book_id)
+
+            self.assertEqual(status["status"], "completed")
+            self.assertEqual(status["processed"], 10)
+
+    def test_existing_book_can_start_embedding_later(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            books_dir = Path(temporary_directory) / "books"
+            book_root = books_dir / "shengweizhilv"
+            book_root.mkdir(parents=True)
+            (book_root / "info.txt").write_text("测试概况\n", encoding="utf-8")
+
+            class UnstartedWorker:
+                def __init__(self, **_kwargs):
+                    pass
+
+                def start(self):
+                    pass
+
+            with (
+                patch.object(config, "BOOKS_DIR", books_dir),
+                patch.object(config, "DATABASE_DIR", Path(temporary_directory) / "database"),
+                patch.object(import_module, "BOOKS_DIR", books_dir),
+                patch.object(import_module, "DATABASE_DIR", Path(temporary_directory) / "database"),
+                patch.object(import_module.threading, "Thread", UnstartedWorker),
+            ):
+                service = BookImportService()
+                self.assertEqual(service.get_status("shengweizhilv")["status"], "ready_for_embedding")
+                status = service.start_embedding("shengweizhilv")
+
+            self.assertEqual(status["status"], "pending")
+            self.assertFalse((book_root / IMPORT_STATE_FILE).exists())
+            self.assertTrue((book_root / "embedding_state.json").exists())
+
     def test_running_embedding_rejects_info_changes_without_touching_build_files(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -135,7 +199,7 @@ class BookImportServiceTests(unittest.TestCase):
             book_root.mkdir(parents=True)
             (book_root / "name.txt").write_text("原书名\n", encoding="utf-8")
             (book_root / "info.txt").write_text("原概况\n", encoding="utf-8")
-            (book_root / IMPORT_STATE_FILE).write_text(json.dumps({
+            (book_root / "embedding_state.json").write_text(json.dumps({
                 "book_id": book_id,
                 "status": "encoding",
                 "processed": 12,
@@ -154,7 +218,7 @@ class BookImportServiceTests(unittest.TestCase):
                 patch.object(BookImportService, "_recover_interrupted_imports"),
             ):
                 service = BookImportService()
-                with self.assertRaisesRegex(ValueError, "向量化正在运行"):
+                with self.assertRaisesRegex(ValueError, "找不到这次未完成"):
                     service.save_info(book_id, "新书名", "新概况")
 
             self.assertEqual((book_root / "name.txt").read_text(encoding="utf-8"), "原书名\n")
@@ -170,7 +234,7 @@ class BookImportServiceTests(unittest.TestCase):
             book_root = books_dir / book_id
             book_root.mkdir(parents=True)
             (book_root / "info.txt").write_text("测试概况\n", encoding="utf-8")
-            (book_root / IMPORT_STATE_FILE).write_text(json.dumps({
+            (book_root / "embedding_state.json").write_text(json.dumps({
                 "book_id": book_id,
                 "status": "ready_for_embedding",
                 "processed": 0,
@@ -186,14 +250,14 @@ class BookImportServiceTests(unittest.TestCase):
                 patch.object(import_module, "DATABASE_DIR", database_dir),
             ):
                 service = BookImportService()
-                original_save_state = service._save_state
+                original_write_state = service._write_state
                 worker_calls = 0
                 worker_calls_lock = threading.Lock()
 
-                def slow_save_state(book_path, state):
+                def slow_write_state(marker, state):
                     if state["status"] == "pending":
                         time.sleep(0.05)
-                    original_save_state(book_path, state)
+                    original_write_state(marker, state)
 
                 def record_worker(_book_path):
                     nonlocal worker_calls
@@ -213,7 +277,7 @@ class BookImportServiceTests(unittest.TestCase):
                     for _ in range(2)
                 ]
                 with (
-                    patch.object(service, "_save_state", slow_save_state),
+                    patch.object(service, "_write_state", slow_write_state),
                     patch.object(service, "_run_embedding", record_worker),
                     patch.object(import_module.threading, "Thread", ImmediateWorker),
                 ):

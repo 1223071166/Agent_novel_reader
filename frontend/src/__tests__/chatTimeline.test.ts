@@ -94,6 +94,10 @@ describe("chat timeline", () => {
           id: "assistant-2",
           role: "assistant",
           content: "第一章的内容如下。",
+          usage: {
+            input: 100, output: 20, total: 120,
+            cached_input: 60, cache_miss_input: 40, reasoning: 5,
+          },
           tool_calls: null,
           tool_call_id: null,
           tool_status: null,
@@ -132,6 +136,7 @@ describe("chat timeline", () => {
       id: "assistant-2",
       type: "assistant",
       content: "第一章的内容如下。",
+      usage: { total: 120 },
     });
   });
 
@@ -148,6 +153,21 @@ describe("chat timeline", () => {
     expect(items).toEqual([
       { id: "assistant-1", type: "assistant", content: "你好，读者" },
     ]);
+  });
+
+  it("shows saved usage on its assistant message and leaves older messages blank", () => {
+    const usage = {
+      input: 100, output: 20, total: 120,
+      cached_input: 60, cache_miss_input: 40, reasoning: 5,
+    };
+    const items = applyChatEvent([
+      { id: "old", type: "assistant", content: "旧回答" },
+      { id: "user", type: "user", content: "新问题" },
+      { id: "new", type: "assistant", content: "新回答" },
+    ], { event: "usage", data: { ...usage, message_id: "server-id" } });
+
+    expect(items[0]).toEqual({ id: "old", type: "assistant", content: "旧回答" });
+    expect(items[2]).toMatchObject({ usage });
   });
 
   it("matches a streamed tool result with its running tool call", () => {

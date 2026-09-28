@@ -1,49 +1,22 @@
-import { useEffect, useRef, useState } from "react";
-import {
-  discardBookImport,
-  importBook,
-  loadBookEmbeddingStatus,
-  loadBookImport,
-  saveBookInfo,
-  startBookEmbedding,
-} from "./api";
-import type { BookImportStatus } from "./types";
+import { useEffect, useState } from "react";
+import { discardBookImport, importBook, loadBookImport, saveBookInfo } from "./api";
 
 type BookImporterProps = {
   initialBookId?: string;
   onClose: () => void;
   onImportCreated: (bookId: string, name: string) => void;
-  onInfoSaved: (bookId: string, name: string) => void;
-  onImported: (bookId: string) => Promise<void>;
+  onImported: (bookId: string, startEmbedding: boolean) => Promise<void>;
   onDiscarded: (bookId: string) => Promise<void>;
 };
-
-const runningStatuses = new Set<BookImportStatus["status"]>([
-  "pending",
-  "loading_model",
-  "encoding",
-  "writing",
-]);
-
-const wait = (milliseconds: number) => new Promise((resolve) => {
-  window.setTimeout(resolve, milliseconds);
-});
-
-function defaultName(filename: string): string {
-  return filename.replace(/\.txt$/i, "");
-}
-
-
 
 export default function BookImporter({
   initialBookId,
   onClose,
   onImportCreated,
-  onInfoSaved,
   onImported,
   onDiscarded,
 }: BookImporterProps) {
-  const [step, setStep] = useState<"upload" | "info" | "embedding">(
+  const [step, setStep] = useState<"upload" | "info" | "completed">(
     initialBookId ? "info" : "upload",
   );
   const [file, setFile] = useState<File | null>(null);
@@ -51,92 +24,29 @@ export default function BookImporter({
   const [chapterCount, setChapterCount] = useState(0);
   const [name, setName] = useState("");
   const [info, setInfo] = useState("");
-  const [status, setStatus] = useState<BookImportStatus | null>(null);
+  const [startEmbedding, setStartEmbedding] = useState(false);
   const [busy, setBusy] = useState(Boolean(initialBookId));
   const [error, setError] = useState("");
-  const mounted = useRef(true);
-  const polling = useRef(false);
-
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
 
   useEffect(() => {
     if (!initialBookId) return;
-    void resumeImport(initialBookId);
+    let cancelled = false;
+    void loadBookImport(initialBookId)
+      .then((current) => {
+        if (cancelled) return;
+        setChapterCount(current.chapter_count ?? 0);
+        setName(current.name || current.original_name?.replace(/\.txt$/i, "") || initialBookId);
+        setInfo(current.info || "");
+        setStep(current.status === "awaiting_info" ? "info" : "completed");
+      })
+      .catch((requestError) => {
+        if (!cancelled) setError(requestError instanceof Error ? requestError.message : "恢复导入失败");
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
+    return () => { cancelled = true; };
   }, [initialBookId]);
-
-  async function resumeImport(resumeBookId: string) {
-    setBusy(true);
-    setError("");
-    try {
-      const current = await loadBookImport(resumeBookId);
-      if (!mounted.current) return;
-      setBookId(resumeBookId);
-      setChapterCount(current.chapter_count ?? 0);
-      setName(current.name || defaultName(current.original_name ?? resumeBookId));
-      setInfo(current.info || "");
-
-      if (current.status === "completed") {
-        await onImported(resumeBookId);
-        return;
-      }
-
-      if (current.status === "awaiting_info") {
-        setStep("info");
-        return;
-      }
-
-      setStep("embedding");
-      setStatus(current);
-      if (runningStatuses.has(current.status)) {
-        setBusy(false);
-        await pollEmbedding(resumeBookId, current);
-      } else if (current.status === "failed") {
-        setError(current.error || "向量化失败，可以重新尝试");
-      }
-    } catch (requestError) {
-      if (mounted.current) {
-        setError(requestError instanceof Error ? requestError.message : "恢复导入失败");
-      }
-    } finally {
-      if (mounted.current) setBusy(false);
-    }
-  }
-
-  async function pollEmbedding(targetBookId: string, initial: BookImportStatus) {
-    if (polling.current) return;
-    polling.current = true;
-    let current = initial;
-    try {
-      while (mounted.current && runningStatuses.has(current.status)) {
-        await wait(1000);
-        if (!mounted.current) return;
-        current = await loadBookEmbeddingStatus(targetBookId);
-        if (mounted.current) setStatus(current);
-      }
-
-      if (!mounted.current) return;
-      if (current.status === "failed") {
-        setError(current.error || "向量化失败，可以重新尝试");
-      } else if (current.status === "completed") {
-        await onImported(targetBookId);
-      }
-    } catch (requestError) {
-      if (!mounted.current) return;
-      const message = requestError instanceof Error ? requestError.message : "向量化失败";
-      setStatus((previous) => previous ? {
-        ...previous,
-        status: "failed",
-        message: "暂时无法读取向量化进度，可以重新连接",
-        error: message,
-      } : previous);
-      setError(message);
-    } finally {
-      polling.current = false;
-    }
-  }
 
   const upload = async () => {
     if (!file || busy) return;
@@ -144,9 +54,9 @@ export default function BookImporter({
     setError("");
     try {
       const result = await importBook(file);
+      const importedName = result.name || file.name.replace(/\.txt$/i, "");
       setBookId(result.book_id);
       setChapterCount(result.chapter_count ?? 0);
-      const importedName = result.name || defaultName(file.name);
       setName(importedName);
       setInfo("");
       setStep("info");
@@ -158,44 +68,39 @@ export default function BookImporter({
     }
   };
 
-  const submitInfo = async () => {
-    if (!bookId || !name.trim() || !info.trim() || busy) return;
+  const enterBook = async (targetBookId: string) => {
     setBusy(true);
     setError("");
     try {
-      const result = await saveBookInfo(bookId, name.trim(), info);
-      onInfoSaved(bookId, result.name ?? name.trim());
-      setStep("embedding");
+      await onImported(targetBookId, startEmbedding);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "保存书籍信息失败");
+      setError(requestError instanceof Error ? requestError.message : "打开书籍失败");
     } finally {
       setBusy(false);
     }
   };
 
-  const runEmbedding = async () => {
-    if (!bookId || busy || polling.current) return;
+  const submitInfo = async () => {
+    if (!bookId || !name.trim() || !info.trim() || busy) return;
     setBusy(true);
     setError("");
+    let saved = false;
     try {
-      const current = await startBookEmbedding(bookId);
-      setStatus(current);
-      if (current.status === "completed") {
-        await onImported(bookId);
-      } else if (current.status === "failed") {
-        setError(current.error || "向量化失败，可以重新尝试");
-      } else {
-        onClose();
-      }
+      await saveBookInfo(bookId, name.trim(), info);
+      saved = true;
+      setStep("completed");
+      await onImported(bookId, startEmbedding);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "向量化失败");
+      setError(requestError instanceof Error
+        ? requestError.message
+        : saved ? "打开书籍失败" : "保存书籍信息失败");
     } finally {
-      if (mounted.current) setBusy(false);
+      setBusy(false);
     }
   };
 
   const discard = async () => {
-    if (!bookId || busy || (status && runningStatuses.has(status.status))) return;
+    if (!bookId || busy) return;
     setBusy(true);
     setError("");
     try {
@@ -204,52 +109,33 @@ export default function BookImporter({
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "放弃导入失败");
     } finally {
-      if (mounted.current) setBusy(false);
+      setBusy(false);
     }
   };
-
-  const progress = status?.total
-    ? Math.round(status.processed / status.total * 100)
-    : 0;
-  const embeddingRunning = Boolean(status && runningStatuses.has(status.status));
 
   return (
     <div className="import-overlay" role="presentation">
       <section className="import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-title">
         <div className="import-header">
-          <div>
-            <h2 id="import-title">{initialBookId ? "继续导入书籍" : "导入书籍"}</h2>
-          </div>
-          <button
-            className="import-close"
-            type="button"
-            aria-label="关闭导入窗口"
-            title="关闭并稍后继续"
-            disabled={busy}
-            onClick={onClose}
-          >
-            ×
-          </button>
+          <h2 id="import-title">{initialBookId ? "继续导入书籍" : "导入书籍"}</h2>
+          <button className="import-close" type="button" aria-label="关闭导入窗口"
+            title="关闭并稍后继续" disabled={busy} onClick={onClose}>×</button>
         </div>
 
         <div className="import-steps" aria-label="导入进度">
           <span className={step === "upload" ? "active" : "done"}>1 上传并切章</span>
-          <span className={step === "info" ? "active" : step === "embedding" ? "done" : ""}>2 书籍信息</span>
-          <span className={step === "embedding" ? "active" : ""}>3 向量化</span>
+          <span className={step === "info" ? "active" : step === "completed" ? "done" : ""}>2 书籍信息</span>
         </div>
 
         {step === "upload" && (
           <div className="import-body">
             <label className="file-picker">
               <span>{file ? file.name : "选择小说 TXT 文件"}</span>
-              <input
-                type="file"
-                accept=".txt,text/plain"
-                disabled={busy}
-                onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-              />
+              <input type="file" accept=".txt,text/plain" disabled={busy}
+                onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
             </label>
-            <button className="import-primary" type="button" disabled={!file || busy} onClick={() => void upload()}>
+            <button className="import-primary" type="button" disabled={!file || busy}
+              onClick={() => void upload()}>
               {busy ? "正在上传并切章…" : "上传并切分章节"}
             </button>
           </div>
@@ -264,43 +150,32 @@ export default function BookImporter({
             </label>
             <label className="info-editor">
               <span>概况</span>
-              <textarea value={info} rows={10} disabled={busy} onChange={(event) => setInfo(event.target.value)} />
+              <textarea value={info} rows={10} disabled={busy}
+                onChange={(event) => setInfo(event.target.value)} />
             </label>
-            <button className="import-primary" type="button" disabled={!name.trim() || !info.trim() || busy} onClick={() => void submitInfo()}>
-              {busy ? "正在保存…" : "下一步"}
+            <label className="import-option">
+              <input type="checkbox" checked={startEmbedding} disabled={busy}
+                onChange={(event) => setStartEmbedding(event.target.checked)} />
+              完成导入后在后台建立模糊搜索索引
+            </label>
+            <button className="import-primary" type="button"
+              disabled={!name.trim() || !info.trim() || busy} onClick={() => void submitInfo()}>
+              {busy ? "正在保存…" : "完成导入"}
             </button>
           </div>
         )}
 
-        {step === "embedding" && (
+        {step === "completed" && (
           <div className="import-body">
-            {status ? (
-              <>
-                <div className="embedding-message">{status.message}</div>
-                <div className="embedding-progress" aria-label={`向量化进度 ${progress}%`}>
-                  <div className="embedding-progress-value" style={{ width: `${progress}%` }} />
-                </div>
-                <div className="embedding-progress-text">
-                  {status.total > 0
-                    ? `${status.processed} / ${status.total}（${progress}%）`
-                    : "正在准备向量模型…"}
-                </div>
-              </>
-            ) : (
-              <p className="import-note">任务会在后台运行，可随时从书籍菜单查看进度。</p>
-            )}
-            {!embeddingRunning && status?.status !== "completed" && (
-              <button className="import-primary" type="button" disabled={busy} onClick={() => void runEmbedding()}>
-                {status?.status === "failed" ? "重新开始后台向量化" : "开始后台向量化"}
-              </button>
-            )}
+            <p className="import-note">书籍已导入，可以开始聊天。</p>
+            {bookId && <button className="import-primary" type="button" disabled={busy}
+              onClick={() => void enterBook(bookId)}>进入书籍</button>}
           </div>
         )}
 
-        {bookId && !embeddingRunning && (
-          <button className="import-discard" type="button" disabled={busy} onClick={() => void discard()}>
-            放弃这次导入
-          </button>
+        {bookId && step === "info" && (
+          <button className="import-discard" type="button" disabled={busy}
+            onClick={() => void discard()}>放弃这次导入</button>
         )}
         {error && <div className="import-error">{error}</div>}
       </section>

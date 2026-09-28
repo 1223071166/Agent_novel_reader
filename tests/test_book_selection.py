@@ -23,7 +23,7 @@ class BookSelectionTests(unittest.TestCase):
         (incomplete / IMPORT_STATE_FILE).write_text("{}", encoding="utf-8")
         embedding = self.books_dir / "book-embedding"
         embedding.mkdir()
-        (embedding / IMPORT_STATE_FILE).write_text("{}", encoding="utf-8")
+        (embedding / "embedding_state.json").write_text("{}", encoding="utf-8")
         (embedding / "info.txt").write_text("简介", encoding="utf-8")
 
         for patcher in (
@@ -68,7 +68,8 @@ class BookSelectionTests(unittest.TestCase):
         selection = backend_module.get_books()
 
         self.assertEqual(selection["selected_book_id"], "book-embedding")
-        self.assertIn("book-embedding", selection["importing_book_ids"])
+        self.assertIn("book-embedding", selection["books"])
+        self.assertNotIn("book-embedding", selection["importing_book_ids"])
 
 
 if __name__ == "__main__":

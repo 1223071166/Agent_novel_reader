@@ -117,6 +117,9 @@ class ChatServiceTests(unittest.TestCase):
         books_patcher = patch.object(config, "BOOKS_DIR", books_dir)
         books_patcher.start()
         self.addCleanup(books_patcher.stop)
+        database_patcher = patch.object(config, "DATABASE_DIR", Path(self.temp_dir.name) / "database")
+        database_patcher.start()
+        self.addCleanup(database_patcher.stop)
         self.storage_patcher = patch.object(
             chat_module,
             "MESSAGE_STORAGE_FILE",
@@ -169,7 +172,7 @@ class ChatServiceTests(unittest.TestCase):
         self.assertEqual(conversation.messages[-1].content, "你好，读者")
         self.print_success("普通回答的事件顺序和消息保存正常")
 
-    def test_usage_setting_controls_usage_request_and_event(self):
+    def test_usage_is_persisted_even_when_display_is_disabled(self):
         enabled_client = FakeClient([[
             text_chunk("开启"),
             usage_chunk(),
@@ -183,14 +186,19 @@ class ChatServiceTests(unittest.TestCase):
             ))
 
         usage = next(event for event in enabled_events if event.event == "usage")
-        self.assertEqual(usage.data, {
+        expected_usage = {
             "input": 100,
             "output": 20,
             "total": 120,
             "cached_input": 60,
             "cache_miss_input": 40,
             "reasoning": 5,
-        })
+        }
+        self.assertEqual({key: usage.data[key] for key in expected_usage}, expected_usage)
+        self.assertEqual(
+            enabled_service._store.load_conversation("usage-enabled", TEST_BOOK_ID).messages[-1].usage,
+            expected_usage,
+        )
         self.assertEqual(
             enabled_client.chat.completions.calls[0]["stream_options"],
             {"include_usage": True},
@@ -219,9 +227,15 @@ class ChatServiceTests(unittest.TestCase):
                 "隐藏用量",
             ))
 
-        self.assertNotIn("usage", [event.event for event in disabled_events])
-        self.assertNotIn("stream_options", disabled_client.chat.completions.calls[0])
-        self.print_success("用量设置同时控制 API 请求和前端事件")
+        self.assertIn("usage", [event.event for event in disabled_events])
+        self.assertEqual(disabled_client.chat.completions.calls[0]["stream_options"],
+                         {"include_usage": True})
+        reloaded = chat_module.ChatService()
+        self.assertEqual(
+            reloaded._store.load_conversation("usage-disabled", TEST_BOOK_ID).messages[-1].usage,
+            expected_usage,
+        )
+        self.print_success("显示开关关闭时也保存用量，重启后仍可读取")
 
     def test_summary_setting_replaces_prompt_and_tools_for_existing_conversation(self):
         fake_client = FakeClient([
@@ -229,8 +243,8 @@ class ChatServiceTests(unittest.TestCase):
             [text_chunk("第二次回答")],
         ])
 
-        def tools_for_setting(enabled):
-            names = ["semantic_search"] + (["get_summary"] if enabled else [])
+        def tools_for_setting(enabled, semantic):
+            names = (["semantic_search"] if semantic else []) + (["get_summary"] if enabled else [])
             return [{"type": "function", "function": {"name": name}} for name in names]
 
         with (
@@ -239,7 +253,7 @@ class ChatServiceTests(unittest.TestCase):
             patch.object(
                 chat_module,
                 "get_system_prompt",
-                side_effect=lambda enabled, max_chapter: f"prompt:{enabled}:{max_chapter}",
+                side_effect=lambda enabled, max_chapter, semantic: f"prompt:{enabled}:{max_chapter}:{semantic}",
             ),
             patch.object(chat_module, "build_tools", side_effect=tools_for_setting),
         ):
@@ -248,17 +262,33 @@ class ChatServiceTests(unittest.TestCase):
             list(service.stream_message(TEST_BOOK_ID, "summary-toggle", "第二次"))
 
         first_request, second_request = fake_client.chat.completions.calls
-        self.assertEqual(first_request["messages"][0]["content"], "prompt:False:None")
-        self.assertEqual(second_request["messages"][0]["content"], "prompt:True:None")
+        self.assertEqual(first_request["messages"][0]["content"], "prompt:False:None:False")
+        self.assertEqual(second_request["messages"][0]["content"], "prompt:True:None:False")
         self.assertEqual(
             [tool["function"]["name"] for tool in first_request["tools"]],
-            ["semantic_search"],
+            [],
         )
         self.assertEqual(
             [tool["function"]["name"] for tool in second_request["tools"]],
-            ["semantic_search", "get_summary"],
+            ["get_summary"],
         )
         self.print_success("旧对话会在下一次请求同步切换总结提示词和工具")
+
+    def test_semantic_search_appears_after_index_is_built(self):
+        fake_client = FakeClient([[text_chunk("第一次回答")], [text_chunk("第二次回答")]])
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
+            service = chat_module.ChatService()
+            list(service.stream_message(TEST_BOOK_ID, "index-toggle", "第一次"))
+            config.BookPaths(TEST_BOOK_ID).vector_db_dir.mkdir(parents=True)
+            list(service.stream_message(TEST_BOOK_ID, "index-toggle", "第二次"))
+
+        first_request, second_request = fake_client.chat.completions.calls
+        first_tools = [tool["function"]["name"] for tool in first_request["tools"]]
+        second_tools = [tool["function"]["name"] for tool in second_request["tools"]]
+        self.assertNotIn("semantic_search", first_tools)
+        self.assertIn("semantic_search", second_tools)
+        self.assertNotIn("semantic_search", first_request["messages"][0]["content"])
+        self.assertIn("semantic_search", second_request["messages"][0]["content"])
 
     def test_spoiler_limit_is_fixed_for_the_whole_request(self):
         fake_client = FakeClient([
@@ -277,7 +307,7 @@ class ChatServiceTests(unittest.TestCase):
             patch.object(
                 chat_module,
                 "get_system_prompt",
-                side_effect=lambda enabled, max_chapter: f"limit:{max_chapter}",
+                side_effect=lambda enabled, max_chapter, semantic: f"limit:{max_chapter}",
             ),
             patch.object(
                 chat_module,
@@ -409,6 +439,37 @@ class ChatServiceTests(unittest.TestCase):
         self.assertEqual(stored.messages[-2].tool_status, "completed")
         self.assertNotIn("display", stored_result)
         self.print_success("工具调用完成后可以继续生成最终回答")
+
+    def test_tool_round_usage_is_attached_to_final_answer(self):
+        fake_client = FakeClient([
+            [tool_chunk("call-usage", "get_chapter_list", "{}"), usage_chunk()],
+            [text_chunk("最终回答"), usage_chunk()],
+        ])
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
+            service = chat_module.ChatService()
+            events = list(service.stream_message(TEST_BOOK_ID, "tool-usage", "列出章节"))
+
+        usage_events = [event for event in events if event.event == "usage"]
+        self.assertEqual(len(usage_events), 1)
+        self.assertEqual(usage_events[0].data["total"], 240)
+        stored = service._store.load_conversation("tool-usage", TEST_BOOK_ID)
+        self.assertIsNone(stored.messages[-3].usage)
+        self.assertEqual(stored.messages[-1].usage["total"], 240)
+        self.assertEqual(usage_events[0].data["message_id"], stored.messages[-1].id)
+
+    def test_missing_usage_does_not_show_partial_or_empty_counts(self):
+        fake_client = FakeClient([
+            [tool_chunk("call-missing", "get_chapter_list", "{}"), usage_chunk()],
+            [text_chunk("最终回答"), SimpleNamespace(choices=[], usage={})],
+        ])
+        with patch.object(chat_module, "get_model_connection", return_value=model_connection(fake_client)):
+            service = chat_module.ChatService()
+            events = list(service.stream_message(TEST_BOOK_ID, "missing-usage", "列出章节"))
+
+        self.assertNotIn("usage", [event.event for event in events])
+        self.assertIsNone(service._store.load_conversation(
+            "missing-usage", TEST_BOOK_ID
+        ).messages[-1].usage)
 
     def test_tool_round_limit_forces_a_final_answer_without_tools(self):
         fake_client = FakeClient([

@@ -46,6 +46,10 @@ class BookPaths:
     def vector_db_dir(self) -> Path:
         return DATABASE_DIR / "vector_db" / self.book_id
 
+    @property
+    def embedding_state_file(self) -> Path:
+        return self.root / "embedding_state.json"
+
 
 VECTOR_COLLECTION_NAME = "novel"
 MESSAGE_STORAGE_FILE = DATABASE_DIR / "conversations.db"

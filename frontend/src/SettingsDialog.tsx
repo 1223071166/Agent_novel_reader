@@ -6,12 +6,13 @@ import { loadAppSettings, saveAppSettings } from "./api";
 type SettingsDialogProps = {
   onClose: () => void;
   onSaved: (showUsage: boolean) => void;
+  onDeleteBooks: () => void;
 };
 
 const MIN_TOOL_ROUNDS = 1;
 const MAX_TOOL_ROUNDS = 100;
 
-export default function SettingsDialog({ onClose, onSaved }: SettingsDialogProps) {
+export default function SettingsDialog({ onClose, onSaved, onDeleteBooks }: SettingsDialogProps) {
   const [toolRoundLimit, setToolRoundLimit] = useState("");
   const [showUsage, setShowUsage] = useState(true);
   const [modelProvider, setModelProvider] = useState<"siliconflow" | "custom">("siliconflow");
@@ -139,7 +140,7 @@ export default function SettingsDialog({ onClose, onSaved }: SettingsDialogProps
             </label>
 
             <div className="settings-field">
-              <span>显示本轮 Token 用量</span>
+              <span>显示 Token 用量</span>
               <button
                 type="button"
                 className={`summary-switch settings-switch ${showUsage ? "enabled" : ""}`}
@@ -236,6 +237,11 @@ export default function SettingsDialog({ onClose, onSaved }: SettingsDialogProps
                 </label>
               </div>
             )}
+
+            <div className="delete-book-setting">
+              <span>删除书籍</span>
+              <button type="button" disabled={saving} onClick={onDeleteBooks}>选择书籍…</button>
+            </div>
 
             {error && <div className="import-error">{error}</div>}
             <div className="settings-actions">

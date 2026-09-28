@@ -38,6 +38,14 @@ export async function saveBookSelection(bookId: string): Promise<void> {
   if (!response.ok) throw await responseError(response, "保存当前书籍失败");
 }
 
+export async function deleteBook(bookId: string): Promise<BookSelection> {
+  const response = await fetch(`${API_BASE_URL}/api/books/${encodeURIComponent(bookId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) throw await responseError(response, "删除书籍失败");
+  return await response.json() as BookSelection;
+}
+
 export async function loadAppSettings(): Promise<AppSettings> {
   const response = await fetch(`${API_BASE_URL}/api/settings`);
   if (!response.ok) throw await responseError(response, "加载设置失败");

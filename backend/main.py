@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, StrictBool, StrictInt
 
 from services.chat_service import ChatService
+from services.book_deletion_service import BookDeletionService
 from services.app_settings import get_app_settings, save_app_settings
 from services.model_provider import get_model_settings, save_model_settings
 from services.book_import_service import BookImportService, IMPORT_STATE_FILE
@@ -22,6 +23,7 @@ app = FastAPI()
 summary_service = SummaryService()
 chat_service = ChatService()
 book_import_service = BookImportService()
+book_deletion_service = BookDeletionService(book_import_service, summary_service, chat_service)
 
 app.add_middleware(
     CORSMiddleware,
@@ -139,20 +141,6 @@ def _all_book_ids() -> list[str]:
     return sorted(path.name for path in BOOKS_DIR.iterdir() if path.is_dir())
 
 
-def _chat_ready_book_ids() -> list[str]:
-    if not BOOKS_DIR.exists():
-        return []
-    return sorted(
-        path.name
-        for path in BOOKS_DIR.iterdir()
-        if path.is_dir()
-        and (
-            not (path / IMPORT_STATE_FILE).exists()
-            or (path / "info.txt").exists()
-        )
-    )
-
-
 def _book_names(book_ids: list[str]) -> dict[str, str]:
     names: dict[str, str] = {}
     for book_id in book_ids:
@@ -179,7 +167,7 @@ def _require_book_id(value: str) -> str:
     book_id = value.strip()
     if not book_id:
         raise HTTPException(status_code=422, detail="book_id 不能为空")
-    if book_id not in _chat_ready_book_ids():
+    if book_id not in _available_book_ids():
         raise HTTPException(status_code=404, detail=f"找不到书籍：{book_id}")
     return book_id
 
@@ -215,6 +203,7 @@ def _conversation_payload(conversation: Conversation) -> dict:
             "tool_calls": message.tool_calls,
             "tool_call_id": message.tool_call_id,
             "tool_status": message.tool_status,
+            "usage": message.usage,
             "tool_result": (
                 make_tool_result(load_tool_result_data(message.content))
                 if message.role == "tool" and message.content is not None
@@ -232,7 +221,6 @@ def _conversation_payload(conversation: Conversation) -> dict:
 @app.get("/api/books")
 def get_books():
     book_ids = _available_book_ids()
-    chat_ready_book_ids = _chat_ready_book_ids()
     all_book_ids = _all_book_ids()
     importing_book_ids = sorted(set(all_book_ids) - set(book_ids))
     selected_book_id = (
@@ -240,12 +228,8 @@ def get_books():
         if SELECTED_BOOK_FILE.exists()
         else ""
     )
-    if selected_book_id not in chat_ready_book_ids:
-        selected_book_id = (
-            book_ids[0]
-            if book_ids
-            else chat_ready_book_ids[0] if chat_ready_book_ids else None
-        )
+    if selected_book_id not in book_ids:
+        selected_book_id = book_ids[0] if book_ids else None
         if selected_book_id is None:
             SELECTED_BOOK_FILE.unlink(missing_ok=True)
         else:
@@ -263,6 +247,16 @@ def save_selected_book(request: BookSelectionRequest):
     book_id = _require_book_id(request.book_id)
     _write_selected_book_id(book_id)
     return {"selected_book_id": book_id}
+
+
+@app.delete("/api/books/{book_id}")
+def delete_book(book_id: str):
+    book_id = _require_book_id(book_id)
+    try:
+        book_deletion_service.delete_book(book_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return get_books()
 
 
 @app.get("/api/books/{book_id}/summaries")

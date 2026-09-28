@@ -37,6 +37,10 @@ class ConversationStoreTests(unittest.TestCase):
                     tool_calls TEXT,
                     tool_call_id TEXT
                 );
+                INSERT INTO conversations (id, book_id, title)
+                VALUES ('legacy', 'book-1', '旧对话');
+                INSERT INTO messages (id, conversation_id, role, content)
+                VALUES ('legacy-answer', 'legacy', 'assistant', '旧回答');
                 """
             )
 
@@ -48,6 +52,26 @@ class ConversationStoreTests(unittest.TestCase):
             }
 
         self.assertIn("tool_status", columns)
+        self.assertIn("usage", columns)
+        self.assertIsNone(store.load_conversation("legacy", "book-1").messages[0].usage)
+
+    def test_usage_is_saved_per_assistant_message_and_preserves_order(self):
+        store = self.create_store()
+        store.create_conversation("conversation-1", "book-1", "用量")
+        store.save_message("conversation-1", Message(id="user-1", role="user", content="第一问"))
+        store.save_message("conversation-1", Message(id="assistant-1", role="assistant", content="第一答"))
+        store.save_message("conversation-1", Message(id="user-2", role="user", content="第二问"))
+        store.save_message("conversation-1", Message(id="assistant-2", role="assistant", content="第二答"))
+
+        usage = {"input": 100, "output": 20, "total": 120,
+                 "cached_input": 60, "cache_miss_input": 40, "reasoning": 5}
+        store.update_message_usage("conversation-1", "assistant-1", usage)
+        messages = store.load_conversation("conversation-1", "book-1").messages
+
+        self.assertEqual([message.id for message in messages],
+                         ["user-1", "assistant-1", "user-2", "assistant-2"])
+        self.assertEqual(messages[1].usage, usage)
+        self.assertIsNone(messages[3].usage)
 
     def test_two_conversations_store_system_messages_separately(self):
         store = self.create_store()

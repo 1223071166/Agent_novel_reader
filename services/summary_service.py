@@ -98,6 +98,7 @@ class SummaryService:
             raise ValueError("总结检索开关必须是布尔值")
         book_path = self._require_book(book_id)
         with self._state_lock:
+            self._require_book(book_id)
             state = read_summary_state(book_path)
             state["enabled"] = enabled
             self._write_state(book_path, state)
@@ -119,6 +120,7 @@ class SummaryService:
         )
 
         with self._state_lock:
+            self._require_book(book_id)
             state = read_summary_state(book_path)
             current_job = state["job"]
             if current_job and current_job.get("status") in RUNNING_SUMMARY_STATUSES:

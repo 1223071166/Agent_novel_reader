@@ -320,14 +320,14 @@ button {
 }
 
 .topbar-embedding {
-  width: 210px;
+  width: auto;
 }
 
 .topbar-embedding-label {
   display: flex;
-  width: 100%;
-  justify-content: space-between;
-  gap: 10px;
+  width: auto;
+  align-items: center;
+  gap: 5px;
   margin-bottom: 4px;
   padding: 0;
   border: 0;
@@ -336,6 +336,10 @@ button {
   cursor: pointer;
   font-size: 10px;
   white-space: nowrap;
+}
+
+.topbar-embedding-label:disabled {
+  cursor: default;
 }
 
 .topbar-embedding .embedding-progress {
@@ -677,8 +681,7 @@ button {
 }
 
 .usage-row {
-  display: flex;
-  gap: 14px;
+  margin-top: 6px;
   color: #8a938c;
   font-size: 10px;
   line-height: 1.6;
@@ -850,7 +853,7 @@ button {
 
 .import-steps {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 7px;
   margin: 24px 0;
 }
@@ -879,6 +882,18 @@ button {
   display: flex;
   flex-direction: column;
   gap: 15px;
+}
+
+.embedding-manager-body {
+  margin-top: 24px;
+}
+
+.import-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #59655c;
+  font-size: 13px;
 }
 
 .file-picker {
@@ -1155,6 +1170,90 @@ button {
   font-size: 12px;
 }
 
+.delete-book-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #e8ece8;
+  color: #805650;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.delete-book-setting button,
+.delete-book-cancel {
+  padding: 8px 11px;
+  border: 1px solid #ead7d3;
+  border-radius: 9px;
+  background: #fff;
+  color: #9a5147;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.delete-book-setting button:disabled,
+.delete-book-cancel:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.delete-book-body {
+  margin-top: 20px;
+}
+
+.delete-book-field {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  color: #465149;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.delete-book-field select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #dce2dc;
+  border-radius: 10px;
+  background: #fff;
+  color: #353b36;
+  font: inherit;
+}
+
+.delete-book-note,
+.delete-book-warning {
+  margin: 0;
+  color: #805650;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.delete-book-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.delete-book-confirm {
+  min-width: 150px;
+  padding: 10px 16px;
+  border-radius: 11px;
+  background: #b64b3f;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.delete-book-confirm:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .summary-toggle-row {
   display: flex;
   align-items: center;
@@ -1357,6 +1456,23 @@ button {
     padding-inline: 9px;
   }
 
+  .topbar-embedding {
+    width: auto;
+  }
+
+  .topbar-embedding-label {
+    margin: 0;
+    padding: 7px 9px;
+    border: 1px solid #dfe4df;
+    border-radius: 9px;
+    font-size: 12px;
+  }
+
+  .topbar-embedding-label span:last-child,
+  .topbar-embedding .embedding-progress {
+    display: none;
+  }
+
   .topbar-book-controls {
     gap: 7px;
   }
@@ -1411,10 +1527,6 @@ button {
   .avatar-space {
     flex-basis: 29px;
     width: 29px;
-  }
-
-  .usage-row {
-    gap: 9px;
   }
 
   .input-area {

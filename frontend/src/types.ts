@@ -25,6 +25,7 @@ export type Message = {
   tool_call_id: string | null;
   tool_status: "completed" | "error" | null;
   tool_result: ToolResult | null;
+  usage?: TokenUsage | null;
 };
 
 export type Conversation = {
@@ -146,6 +147,7 @@ export type TimelineItem =
       id: string;
       type: "assistant";
       content: string;
+      usage?: TokenUsage | null;
     }
   | {
       id: string;
@@ -159,7 +161,6 @@ export type FrontendConversation = {
   messages: TimelineItem[];
   draft: string;
   error: string;
-  usage: TokenUsage | null;
 };
 
 export type BookWorkspace = {
